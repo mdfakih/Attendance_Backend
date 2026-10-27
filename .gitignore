@@ -1,4 +1,4 @@
-# Dependencies / build
+﻿# Dependencies / build
 node_modules/
 dist/
 coverage/
@@ -19,6 +19,7 @@ infra/.env
 infra/.data/
 
 # Neon CLI state
+.neon
 .neon/
 
 # Tooling
