@@ -1,0 +1,185 @@
+// Identity, sessions, RBAC, activation codes and device bindings.
+
+model User {
+  id                String             @id @default(uuid(7)) @db.Uuid
+  email             String             @unique
+  fullName          String             @map("full_name")
+  phoneE164         String?            @map("phone_e164")
+  passwordHash      String?            @map("password_hash")
+  mfaSecretEnc      String?            @map("mfa_secret_enc")
+  mfaEnabled        Boolean            @default(false) @map("mfa_enabled")
+  status            UserStatus         @default(ACTIVE)
+  failedLogins      Int                @default(0) @map("failed_logins")
+  lockedUntil       DateTime?          @map("locked_until") @db.Timestamptz
+  passwordChangedAt DateTime?          @map("password_changed_at") @db.Timestamptz
+  lastLoginAt       DateTime?          @map("last_login_at") @db.Timestamptz
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt         DateTime           @updatedAt @map("updated_at") @db.Timestamptz
+  memberships       TenantMembership[]
+
+  @@map("users")
+}
+
+/// permissions: { MODULE: ["view","create",...] } validated against contracts registry.
+model Role {
+  id          String             @id @default(uuid(7)) @db.Uuid
+  tenantId    String             @map("tenant_id") @db.Uuid
+  name        String
+  kind        RoleKind
+  description String?
+  isSystem    Boolean            @default(false) @map("is_system")
+  permissions Json               @default("{}")
+  createdAt   DateTime           @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime           @updatedAt @map("updated_at") @db.Timestamptz
+  memberships TenantMembership[]
+
+  @@unique([tenantId, name])
+  @@map("roles")
+}
+
+model TenantMembership {
+  id            String     @id @default(uuid(7)) @db.Uuid
+  tenantId      String     @map("tenant_id") @db.Uuid
+  userId        String     @map("user_id") @db.Uuid
+  user          User       @relation(fields: [userId], references: [id])
+  roleId        String     @map("role_id") @db.Uuid
+  role          Role       @relation(fields: [roleId], references: [id])
+  status        UserStatus @default(ACTIVE)
+  permVersion   Int        @default(1) @map("perm_version")
+  branchIds     String[]   @default([]) @map("branch_ids") @db.Uuid
+  departmentIds String[]   @default([]) @map("department_ids") @db.Uuid
+  lastActiveAt  DateTime?  @map("last_active_at") @db.Timestamptz
+  createdAt     DateTime   @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime   @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@unique([tenantId, userId])
+  @@index([tenantId, roleId])
+  @@map("tenant_memberships")
+}
+
+model UserInvitation {
+  id            String    @id @default(uuid(7)) @db.Uuid
+  tenantId      String    @map("tenant_id") @db.Uuid
+  email         String
+  fullName      String    @map("full_name")
+  roleId        String    @map("role_id") @db.Uuid
+  branchIds     String[]  @default([]) @map("branch_ids") @db.Uuid
+  departmentIds String[]  @default([]) @map("department_ids") @db.Uuid
+  tokenHash     String    @unique @map("token_hash")
+  invitedById   String?   @map("invited_by_id") @db.Uuid
+  expiresAt     DateTime  @map("expires_at") @db.Timestamptz
+  acceptedAt    DateTime? @map("accepted_at") @db.Timestamptz
+  revokedAt     DateTime? @map("revoked_at") @db.Timestamptz
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([tenantId, email])
+  @@map("user_invitations")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid(7)) @db.Uuid
+  realm     AuthRealm
+  subjectId String    @map("subject_id") @db.Uuid
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz
+  usedAt    DateTime? @map("used_at") @db.Timestamptz
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  @@map("password_reset_tokens")
+}
+
+/// Opaque rotating refresh tokens for all three realms. Only the SHA-256 hash is stored.
+model RefreshToken {
+  id                String    @id @default(uuid(7)) @db.Uuid
+  realm             AuthRealm
+  subjectId         String    @map("subject_id") @db.Uuid
+  tenantId          String?   @map("tenant_id") @db.Uuid
+  bindingId         String?   @map("binding_id") @db.Uuid
+  familyId          String    @map("family_id") @db.Uuid
+  parentId          String?   @map("parent_id") @db.Uuid
+  tokenHash         String    @unique @map("token_hash")
+  expiresAt         DateTime  @map("expires_at") @db.Timestamptz
+  absoluteExpiresAt DateTime? @map("absolute_expires_at") @db.Timestamptz
+  usedAt            DateTime? @map("used_at") @db.Timestamptz
+  revokedAt         DateTime? @map("revoked_at") @db.Timestamptz
+  revokeReason      String?   @map("revoke_reason")
+  ip                String?
+  userAgent         String?   @map("user_agent")
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([familyId])
+  @@index([realm, subjectId])
+  @@index([bindingId])
+  @@map("refresh_tokens")
+}
+
+/// Employer-issued one-time code. Verified only via code_hmac. code_enc (AES-256-GCM) is kept
+/// while ISSUED so an authorised employer user can reveal/export it; cleared on any terminal status.
+/// live_key = "<employeeId>:<purpose>" while ISSUED, NULL otherwise → one live code per purpose.
+model ActivationCode {
+  id              String      @id @default(uuid(7)) @db.Uuid
+  tenantId        String      @map("tenant_id") @db.Uuid
+  employeeId      String      @map("employee_id") @db.Uuid
+  employee        Employee    @relation(fields: [employeeId], references: [id])
+  purpose         CodePurpose
+  codeHmac        String      @map("code_hmac")
+  codeEnc         String?     @map("code_enc")
+  pepperVersion   Int         @map("pepper_version")
+  status          CodeStatus  @default(ISSUED)
+  failedAttempts  Int         @default(0) @map("failed_attempts")
+  expiresAt       DateTime    @map("expires_at") @db.Timestamptz
+  issuedVia       String      @map("issued_via")
+  issuedByActor   ActorType   @map("issued_by_actor")
+  issuedById      String?     @map("issued_by_id") @db.Uuid
+  usedAt          DateTime?   @map("used_at") @db.Timestamptz
+  usedByBindingId String?     @map("used_by_binding_id") @db.Uuid
+  lockedAt        DateTime?   @map("locked_at") @db.Timestamptz
+  revokedAt       DateTime?   @map("revoked_at") @db.Timestamptz
+  liveKey         String?     @unique @map("live_key")
+  createdAt       DateTime    @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime    @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@index([tenantId, status, expiresAt])
+  @@index([tenantId, employeeId])
+  @@map("activation_codes")
+}
+
+/// One device per employee. live_employee_id is set while PENDING/ACTIVE, NULL when REVOKED.
+model DeviceBinding {
+  id                  String        @id @default(uuid(7)) @db.Uuid
+  tenantId            String        @map("tenant_id") @db.Uuid
+  employeeId          String        @map("employee_id") @db.Uuid
+  employee            Employee      @relation(fields: [employeeId], references: [id])
+  activationCodeId    String?       @map("activation_code_id") @db.Uuid
+  installId           String        @map("install_id") @db.Uuid
+  platform            String        @default("ANDROID")
+  publicKeySpki       String        @map("public_key_spki")
+  keyFingerprint      String        @map("key_fingerprint")
+  keyAlg              String        @default("ES256") @map("key_alg")
+  androidIdHmac       String?       @map("android_id_hmac")
+  manufacturer        String        @default("")
+  model               String        @default("")
+  osVersion           String        @default("") @map("os_version")
+  appVersion          String        @default("") @map("app_version")
+  fcmToken            String?       @map("fcm_token")
+  fcmTokenUpdatedAt   DateTime?     @map("fcm_token_updated_at") @db.Timestamptz
+  status              BindingStatus
+  activationSelfieKey String?       @map("activation_selfie_key")
+  approvedById        String?       @map("approved_by_id") @db.Uuid
+  approvedAt          DateTime?     @map("approved_at") @db.Timestamptz
+  activatedAt         DateTime?     @map("activated_at") @db.Timestamptz
+  lastSeenAt          DateTime?     @map("last_seen_at") @db.Timestamptz
+  revokedAt           DateTime?     @map("revoked_at") @db.Timestamptz
+  revokeReason        String?       @map("revoke_reason")
+  revokedByActor      ActorType?    @map("revoked_by_actor")
+  revokedById         String?       @map("revoked_by_id") @db.Uuid
+  revokeNote          String?       @map("revoke_note")
+  liveEmployeeId      String?       @unique @map("live_employee_id") @db.Uuid
+  createdAt           DateTime      @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt           DateTime      @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@index([tenantId, status, createdAt(sort: Desc)])
+  @@index([tenantId, employeeId, createdAt(sort: Desc)])
+  @@index([keyFingerprint])
+  @@map("device_bindings")
+}

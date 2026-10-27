@@ -1,0 +1,205 @@
+// Shared generator, datasource and enums. Domain models live in sibling files.
+// Conventions: snake_case tables/columns via @@map/@map, UUIDv7 ids, timestamptz in UTC,
+// business dates as `date` in the tenant timezone, money as numeric(14,2).
+
+generator client {
+  provider            = "prisma-client"
+  output              = "../../src/generated/prisma"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum TenantStatus {
+  TRIAL
+  ACTIVE
+  PAST_DUE
+  SUSPENDED
+  CANCELLED
+}
+
+enum PayrollTier {
+  BASIC
+  FULL
+}
+
+enum PlatformRole {
+  SUPERADMIN
+  SUPPORT
+  FINANCE
+  READONLY
+}
+
+enum UserStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum RoleKind {
+  ADMIN
+  MANAGER
+}
+
+enum EmployeeStatus {
+  INVITED
+  ACTIVE
+  DEACTIVATED
+  EXITED
+}
+
+enum BindingStatus {
+  PENDING
+  ACTIVE
+  REVOKED
+}
+
+enum CodePurpose {
+  ACTIVATION
+  PIN_RESET
+}
+
+enum CodeStatus {
+  ISSUED
+  USED
+  LOCKED
+  REVOKED
+  EXPIRED
+}
+
+enum AuthRealm {
+  EMPLOYEE
+  TENANT_USER
+  PLATFORM_USER
+}
+
+enum ActorType {
+  EMPLOYEE
+  TENANT_USER
+  PLATFORM_USER
+  SYSTEM
+}
+
+enum GeofenceMode {
+  ASSIGNED_SITES
+  ANY_TENANT_SITE
+}
+
+enum HoursMode {
+  FIRST_IN_LAST_OUT
+  SUM_OF_PAIRS
+}
+
+enum MissingOutTreatment {
+  ABSENT
+  HALF_DAY
+  PRESENT_FLAGGED
+}
+
+enum DayType {
+  WORKING
+  WEEKLY_OFF
+  HOLIDAY
+}
+
+enum AttendanceStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  PRESENT
+  HALF_DAY
+  ABSENT
+  MISSING_OUT
+  LEAVE
+  HALF_LEAVE
+  HOLIDAY
+  WEEKLY_OFF
+}
+
+enum PunchDirection {
+  IN
+  OUT
+}
+
+enum PunchSource {
+  APP
+  EMPLOYER
+}
+
+enum OtState {
+  NOT_APPLICABLE
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum MarkAction {
+  SET
+  REVOKE
+}
+
+enum AccrualMode {
+  NONE
+  FIXED_QUOTA
+  YEARLY_ACCRUAL
+  MONTHLY_ACCRUAL
+}
+
+enum DayPart {
+  FULL
+  FIRST_HALF
+  SECOND_HALF
+}
+
+enum LeaveRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum LeaveEntryType {
+  OPENING
+  ACCRUAL
+  CARRY_FORWARD
+  LAPSE
+  DEBIT
+  CREDIT
+  ADJUSTMENT
+}
+
+enum SalaryBasis {
+  MONTHLY
+  WEEKLY
+  HOURLY
+}
+
+enum PayStatus {
+  OPEN
+  LOCKED
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  SUSPENDED
+  CANCELLED
+}
+
+enum ChargeStatus {
+  DRAFT
+  DUE
+  PAID
+  OVERDUE
+  VOID
+}
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  DONE
+  FAILED
+  EXPIRED
+}

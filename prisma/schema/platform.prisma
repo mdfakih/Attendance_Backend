@@ -1,0 +1,203 @@
+// Platform (superadmin) side: tenants, settings, features, plans and manual billing.
+
+model PlatformUser {
+  id           String       @id @default(uuid(7)) @db.Uuid
+  email        String       @unique
+  fullName     String       @map("full_name")
+  passwordHash String       @map("password_hash")
+  role         PlatformRole
+  status       UserStatus   @default(ACTIVE)
+  mfaSecretEnc String?      @map("mfa_secret_enc")
+  mfaEnabled   Boolean      @default(false) @map("mfa_enabled")
+  failedLogins Int          @default(0) @map("failed_logins")
+  lockedUntil  DateTime?    @map("locked_until") @db.Timestamptz
+  lastLoginAt  DateTime?    @map("last_login_at") @db.Timestamptz
+  createdAt    DateTime     @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime     @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@map("platform_users")
+}
+
+model Plan {
+  id                   String         @id @default(uuid(7)) @db.Uuid
+  code                 String
+  name                 String
+  version              Int            @default(1)
+  pricePerEmployee     Decimal        @map("price_per_employee") @db.Decimal(10, 2)
+  minBillableEmployees Int            @default(0) @map("min_billable_employees")
+  defaultEmployeeCap   Int?           @map("default_employee_cap")
+  trialDays            Int            @default(14) @map("trial_days")
+  paymentTermsDays     Int            @default(15) @map("payment_terms_days")
+  active               Boolean        @default(true)
+  createdAt            DateTime       @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt            DateTime       @updatedAt @map("updated_at") @db.Timestamptz
+  subscriptions        Subscription[]
+
+  @@unique([code, version])
+  @@map("plans")
+}
+
+model Tenant {
+  id                   String          @id @default(uuid(7)) @db.Uuid
+  slug                 String          @unique
+  legalName            String          @map("legal_name")
+  displayName          String          @map("display_name")
+  gstin                String?
+  stateCode            String          @map("state_code") @db.Char(2)
+  billingEmail         String          @map("billing_email")
+  timezone             String          @default("Asia/Kolkata")
+  status               TenantStatus    @default(TRIAL)
+  statusReason         String?         @map("status_reason")
+  payrollTier          PayrollTier     @default(BASIC) @map("payroll_tier")
+  employeeCap          Int?            @map("employee_cap")
+  supportAccessAllowed Boolean         @default(true) @map("support_access_allowed")
+  createdById          String?         @map("created_by_id") @db.Uuid
+  createdAt            DateTime        @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt            DateTime        @updatedAt @map("updated_at") @db.Timestamptz
+  settings             TenantSettings?
+  features             TenantFeature[]
+  subscription         Subscription?
+
+  @@index([status])
+  @@map("tenants")
+}
+
+model TenantSettings {
+  tenantId              String   @id @map("tenant_id") @db.Uuid
+  tenant                Tenant   @relation(fields: [tenantId], references: [id])
+  payableDaysBasis      String   @default("CALENDAR") @map("payable_days_basis")
+  netPayRounding        String   @default("NEAREST_RUPEE") @map("net_pay_rounding")
+  defaultOtMultiplier   Decimal  @default(1.5) @map("default_ot_multiplier") @db.Decimal(4, 2)
+  activationCodeTtlDays Int      @default(7) @map("activation_code_ttl_days")
+  defaultSiteRadiusM    Int      @default(100) @map("default_site_radius_m")
+  defaultMaxAccuracyM   Int      @default(100) @map("default_max_accuracy_m")
+  accuracyBufferCapM    Int      @default(25) @map("accuracy_buffer_cap_m")
+  selfieRetentionDays   Int      @default(90) @map("selfie_retention_days")
+  exitedPurgeDays       Int      @default(180) @map("exited_purge_days")
+  missingOutReminder    Boolean  @default(true) @map("missing_out_reminder")
+  defaultPolicyId       String?  @map("default_policy_id") @db.Uuid
+  defaultCalendarId     String?  @map("default_calendar_id") @db.Uuid
+  defaultPatternId      String?  @map("default_pattern_id") @db.Uuid
+  featuresVersion       Int      @default(1) @map("features_version")
+  updatedAt             DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@map("tenant_settings")
+}
+
+model TenantFeature {
+  tenantId       String     @map("tenant_id") @db.Uuid
+  tenant         Tenant     @relation(fields: [tenantId], references: [id])
+  key            String
+  enabled        Boolean
+  config         Json       @default("{}")
+  updatedByActor ActorType? @map("updated_by_actor")
+  updatedById    String?    @map("updated_by_id") @db.Uuid
+  updatedAt      DateTime   @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@id([tenantId, key])
+  @@map("tenant_features")
+}
+
+model Subscription {
+  id                 String               @id @default(uuid(7)) @db.Uuid
+  tenantId           String               @unique @map("tenant_id") @db.Uuid
+  tenant             Tenant               @relation(fields: [tenantId], references: [id])
+  planId             String               @map("plan_id") @db.Uuid
+  plan               Plan                 @relation(fields: [planId], references: [id])
+  status             SubscriptionStatus   @default(TRIALING)
+  billingInterval    String               @default("MONTH") @map("billing_interval")
+  currentPeriodStart DateTime             @map("current_period_start") @db.Date
+  currentPeriodEnd   DateTime             @map("current_period_end") @db.Date
+  nextDueDate        DateTime?            @map("next_due_date") @db.Date
+  trialEndsAt        DateTime?            @map("trial_ends_at") @db.Date
+  priceOverride      Decimal?             @map("price_override") @db.Decimal(10, 2)
+  discountPct        Decimal              @default(0) @map("discount_pct") @db.Decimal(5, 2)
+  provider           String               @default("MANUAL")
+  suspendedAt        DateTime?            @map("suspended_at") @db.Timestamptz
+  suspendReason      String?              @map("suspend_reason")
+  notes              String?
+  createdAt          DateTime             @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt          DateTime             @updatedAt @map("updated_at") @db.Timestamptz
+  charges            SubscriptionCharge[]
+  events             SubscriptionEvent[]
+
+  @@map("subscriptions")
+}
+
+model SubscriptionEvent {
+  id             String       @id @default(uuid(7)) @db.Uuid
+  tenantId       String       @map("tenant_id") @db.Uuid
+  subscriptionId String       @map("subscription_id") @db.Uuid
+  subscription   Subscription @relation(fields: [subscriptionId], references: [id])
+  eventType      String       @map("event_type")
+  fromStatus     String?      @map("from_status")
+  toStatus       String?      @map("to_status")
+  payload        Json         @default("{}")
+  actorType      ActorType    @map("actor_type")
+  actorId        String?      @map("actor_id") @db.Uuid
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@map("subscription_events")
+}
+
+model SubscriptionCharge {
+  id                String       @id @default(uuid(7)) @db.Uuid
+  tenantId          String       @map("tenant_id") @db.Uuid
+  subscriptionId    String       @map("subscription_id") @db.Uuid
+  subscription      Subscription @relation(fields: [subscriptionId], references: [id])
+  periodStart       DateTime     @map("period_start") @db.Date
+  periodEnd         DateTime     @map("period_end") @db.Date
+  billableEmployees Int          @map("billable_employees")
+  unitPrice         Decimal      @map("unit_price") @db.Decimal(10, 2)
+  subtotal          Decimal      @db.Decimal(14, 2)
+  gstRate           Decimal      @default(18) @map("gst_rate") @db.Decimal(5, 2)
+  gstAmount         Decimal      @map("gst_amount") @db.Decimal(14, 2)
+  total             Decimal      @db.Decimal(14, 2)
+  amountPaid        Decimal      @default(0) @map("amount_paid") @db.Decimal(14, 2)
+  status            ChargeStatus @default(DRAFT)
+  issuedAt          DateTime?    @map("issued_at") @db.Timestamptz
+  dueDate           DateTime?    @map("due_date") @db.Date
+  paidAt            DateTime?    @map("paid_at") @db.Timestamptz
+  invoiceNo         String?      @map("invoice_no")
+  notes             String?
+  createdByActor    ActorType    @map("created_by_actor")
+  createdById       String?      @map("created_by_id") @db.Uuid
+  createdAt         DateTime     @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt         DateTime     @updatedAt @map("updated_at") @db.Timestamptz
+  payments          Payment[]
+
+  @@index([status, dueDate])
+  @@index([tenantId, periodStart(sort: Desc)])
+  @@map("subscription_charges")
+}
+
+model Payment {
+  id          String              @id @default(uuid(7)) @db.Uuid
+  tenantId    String              @map("tenant_id") @db.Uuid
+  chargeId    String?             @map("charge_id") @db.Uuid
+  charge      SubscriptionCharge? @relation(fields: [chargeId], references: [id])
+  amount      Decimal             @db.Decimal(14, 2)
+  method      String
+  referenceNo String?             @map("reference_no")
+  receivedOn  DateTime            @map("received_on") @db.Date
+  recordedById String             @map("recorded_by_id") @db.Uuid
+  notes       String?
+  status      String              @default("RECORDED")
+  createdAt   DateTime            @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([tenantId, receivedOn(sort: Desc)])
+  @@map("payments")
+}
+
+model UsageDailySnapshot {
+  tenantId         String   @map("tenant_id") @db.Uuid
+  snapshotDate     DateTime @map("snapshot_date") @db.Date
+  activeEmployees  Int      @map("active_employees")
+  invitedEmployees Int      @map("invited_employees")
+  punches          Int
+  webUsers         Int      @map("web_users")
+
+  @@id([tenantId, snapshotDate])
+  @@map("usage_daily_snapshots")
+}

@@ -1,0 +1,117 @@
+// Files, exports, notifications, audit and consent.
+
+model StoredFile {
+  id             String    @id @default(uuid(7)) @db.Uuid
+  tenantId       String    @map("tenant_id") @db.Uuid
+  bucket         String
+  objectKey      String    @unique @map("object_key")
+  fileName       String    @map("file_name")
+  purpose        String
+  mime           String
+  sizeBytes      BigInt    @map("size_bytes")
+  createdByActor ActorType @map("created_by_actor")
+  createdById    String?   @map("created_by_id") @db.Uuid
+  expiresAt      DateTime? @map("expires_at") @db.Timestamptz
+  deletedAt      DateTime? @map("deleted_at") @db.Timestamptz
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([tenantId, purpose, createdAt(sort: Desc)])
+  @@index([expiresAt])
+  @@map("stored_files")
+}
+
+model ExportJob {
+  id            String    @id @default(uuid(7)) @db.Uuid
+  tenantId      String    @map("tenant_id") @db.Uuid
+  requestedById String    @map("requested_by_id") @db.Uuid
+  exportType    String    @map("export_type")
+  format        String
+  params        Json
+  status        JobStatus @default(QUEUED)
+  progress      Int       @default(0)
+  fileId        String?   @map("file_id") @db.Uuid
+  error         String?
+  startedAt     DateTime? @map("started_at") @db.Timestamptz
+  finishedAt    DateTime? @map("finished_at") @db.Timestamptz
+  expiresAt     DateTime? @map("expires_at") @db.Timestamptz
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([tenantId, requestedById, createdAt(sort: Desc)])
+  @@map("export_jobs")
+}
+
+model Notification {
+  id            String    @id @default(uuid(7)) @db.Uuid
+  tenantId      String    @map("tenant_id") @db.Uuid
+  recipientType String    @map("recipient_type")
+  recipientId   String    @map("recipient_id") @db.Uuid
+  type          String
+  title         String
+  body          String
+  data          Json      @default("{}")
+  pushStatus    String    @default("NONE") @map("push_status")
+  sentAt        DateTime? @map("sent_at") @db.Timestamptz
+  readAt        DateTime? @map("read_at") @db.Timestamptz
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([tenantId, recipientType, recipientId, createdAt(sort: Desc)])
+  @@map("notifications")
+}
+
+/// Append-only. Never contains activation codes or other secrets.
+model AuditLog {
+  id         String    @id @default(uuid(7)) @db.Uuid
+  tenantId   String?   @map("tenant_id") @db.Uuid
+  occurredAt DateTime  @default(now()) @map("occurred_at") @db.Timestamptz
+  actorType  ActorType @map("actor_type")
+  actorId    String?   @map("actor_id") @db.Uuid
+  actorName  String?   @map("actor_name")
+  action     String
+  entityType String    @map("entity_type")
+  entityId   String?   @map("entity_id") @db.Uuid
+  before     Json?
+  after      Json?
+  reason     String?
+  requestId  String?   @map("request_id")
+  ip         String?
+  userAgent  String?   @map("user_agent")
+
+  @@index([tenantId, occurredAt(sort: Desc)])
+  @@index([tenantId, entityType, entityId, occurredAt(sort: Desc)])
+  @@index([actorId, occurredAt(sort: Desc)])
+  @@map("audit_logs")
+}
+
+/// tenant_id NULL = platform default notice.
+model ConsentNotice {
+  id          String    @id @default(uuid(7)) @db.Uuid
+  tenantId    String?   @map("tenant_id") @db.Uuid
+  audience    String
+  language    String    @default("en")
+  version     Int
+  title       String
+  bodyMd      String    @map("body_md")
+  purposes    Json
+  publishedAt DateTime? @map("published_at") @db.Timestamptz
+  retiredAt   DateTime? @map("retired_at") @db.Timestamptz
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([audience, language, publishedAt])
+  @@map("consent_notices")
+}
+
+model ConsentRecord {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  tenantId    String   @map("tenant_id") @db.Uuid
+  subjectType String   @map("subject_type")
+  subjectId   String   @map("subject_id") @db.Uuid
+  noticeId    String   @map("notice_id") @db.Uuid
+  action      String
+  purposes    Json
+  method      String
+  bindingId   String?  @map("binding_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([tenantId, subjectType, subjectId, createdAt(sort: Desc)])
+  @@map("consent_records")
+}

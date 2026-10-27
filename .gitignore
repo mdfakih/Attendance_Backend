@@ -1,0 +1,31 @@
+# Dependencies / build
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Generated Prisma client
+src/generated/
+
+# Env / secrets (keep the *.example files)
+.env
+.env.*
+!.env.example
+infra/.env
+*.pem
+*.key
+
+# Local infra data (Postgres, object storage volumes)
+infra/.data/
+
+# Neon CLI state
+.neon/
+
+# Tooling
+.memsearch/
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.log
+.DS_Store
+Thumbs.db

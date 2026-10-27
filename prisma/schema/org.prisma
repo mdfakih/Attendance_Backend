@@ -1,0 +1,154 @@
+// Organisation structure, geofenced sites and employees.
+
+model Branch {
+  id                 String     @id @default(uuid(7)) @db.Uuid
+  tenantId           String     @map("tenant_id") @db.Uuid
+  name               String
+  code               String?
+  stateCode          String     @map("state_code") @db.Char(2)
+  address            String?
+  holidayCalendarId  String?    @map("holiday_calendar_id") @db.Uuid
+  weeklyOffPatternId String?    @map("weekly_off_pattern_id") @db.Uuid
+  defaultShiftId     String?    @map("default_shift_id") @db.Uuid
+  active             Boolean    @default(true)
+  createdAt          DateTime   @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt          DateTime   @updatedAt @map("updated_at") @db.Timestamptz
+  employees          Employee[]
+  sites              Site[]
+
+  @@unique([tenantId, name])
+  @@map("branches")
+}
+
+model Department {
+  id        String     @id @default(uuid(7)) @db.Uuid
+  tenantId  String     @map("tenant_id") @db.Uuid
+  name      String
+  code      String?
+  active    Boolean    @default(true)
+  createdAt DateTime   @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime   @updatedAt @map("updated_at") @db.Timestamptz
+  employees Employee[]
+
+  @@unique([tenantId, name])
+  @@map("departments")
+}
+
+model Site {
+  id           String         @id @default(uuid(7)) @db.Uuid
+  tenantId     String         @map("tenant_id") @db.Uuid
+  branchId     String?        @map("branch_id") @db.Uuid
+  branch       Branch?        @relation(fields: [branchId], references: [id])
+  name         String
+  address      String?
+  lat          Float
+  lng          Float
+  radiusM      Int            @map("radius_m")
+  maxAccuracyM Int            @map("max_accuracy_m")
+  active       Boolean        @default(true)
+  createdAt    DateTime       @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime       @updatedAt @map("updated_at") @db.Timestamptz
+  employees    EmployeeSite[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId, branchId])
+  @@map("sites")
+}
+
+model EmployeeSite {
+  tenantId   String   @map("tenant_id") @db.Uuid
+  employeeId String   @map("employee_id") @db.Uuid
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  siteId     String   @map("site_id") @db.Uuid
+  site       Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@id([employeeId, siteId])
+  @@index([tenantId, siteId])
+  @@map("employee_sites")
+}
+
+/// live_phone = phone_e164 while INVITED/ACTIVE (globally unique), NULL once deactivated/exited.
+/// live_code_key = "<tenantId>:<employeeCode>" while not EXITED.
+model Employee {
+  id                 String                     @id @default(uuid(7)) @db.Uuid
+  tenantId           String                     @map("tenant_id") @db.Uuid
+  employeeCode       String?                    @map("employee_code")
+  fullName           String                     @map("full_name")
+  phoneE164          String                     @map("phone_e164")
+  email              String?
+  designation        String?
+  branchId           String                     @map("branch_id") @db.Uuid
+  branch             Branch                     @relation(fields: [branchId], references: [id])
+  departmentId       String?                    @map("department_id") @db.Uuid
+  department         Department?                @relation(fields: [departmentId], references: [id])
+  dateOfJoining      DateTime                   @map("date_of_joining") @db.Date
+  exitDate           DateTime?                  @map("exit_date") @db.Date
+  exitReason         String?                    @map("exit_reason")
+  status             EmployeeStatus             @default(INVITED)
+  geofenceMode       GeofenceMode               @default(ASSIGNED_SITES) @map("geofence_mode")
+  weeklyOffPatternId String?                    @map("weekly_off_pattern_id") @db.Uuid
+  policyId           String?                    @map("policy_id") @db.Uuid
+  dutyMinutes        Int?                       @map("duty_minutes")
+  createdVia         String                     @default("SINGLE") @map("created_via")
+  livePhone          String?                    @unique @map("live_phone")
+  liveCodeKey        String?                    @unique @map("live_code_key")
+  activatedAt        DateTime?                  @map("activated_at") @db.Timestamptz
+  deactivatedAt      DateTime?                  @map("deactivated_at") @db.Timestamptz
+  createdAt          DateTime                   @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt          DateTime                   @updatedAt @map("updated_at") @db.Timestamptz
+  sites              EmployeeSite[]
+  activationCodes    ActivationCode[]
+  bindings           DeviceBinding[]
+  shiftAssignments   ShiftAssignment[]
+  salaryAssignments  EmployeeSalaryAssignment[]
+  attendanceDays     AttendanceDay[]
+  punches            Punch[]
+  leaveRequests      LeaveRequest[]
+  paySummaries       EmployeePaySummary[]
+
+  @@index([tenantId, status])
+  @@index([tenantId, branchId])
+  @@index([tenantId, departmentId])
+  @@index([tenantId, fullName])
+  @@index([tenantId, phoneE164])
+  @@map("employees")
+}
+
+model EmployeeImport {
+  id            String              @id @default(uuid(7)) @db.Uuid
+  tenantId      String              @map("tenant_id") @db.Uuid
+  uploadedById  String              @map("uploaded_by_id") @db.Uuid
+  fileName      String              @map("file_name")
+  status        String
+  totalRows     Int                 @default(0) @map("total_rows")
+  validRows     Int                 @default(0) @map("valid_rows")
+  errorRows     Int                 @default(0) @map("error_rows")
+  committedRows Int                 @default(0) @map("committed_rows")
+  validatedAt   DateTime?           @map("validated_at") @db.Timestamptz
+  committedAt   DateTime?           @map("committed_at") @db.Timestamptz
+  failure       String?
+  createdAt     DateTime            @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt     DateTime            @updatedAt @map("updated_at") @db.Timestamptz
+  rows          EmployeeImportRow[]
+
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@map("employee_imports")
+}
+
+model EmployeeImportRow {
+  id         String         @id @default(uuid(7)) @db.Uuid
+  tenantId   String         @map("tenant_id") @db.Uuid
+  importId   String         @map("import_id") @db.Uuid
+  import     EmployeeImport @relation(fields: [importId], references: [id], onDelete: Cascade)
+  rowNo      Int            @map("row_no")
+  raw        Json
+  normalized Json?
+  status     String
+  errors     Json           @default("[]")
+  employeeId String?        @map("employee_id") @db.Uuid
+
+  @@unique([importId, rowNo])
+  @@index([tenantId, importId, status])
+  @@map("employee_import_rows")
+}

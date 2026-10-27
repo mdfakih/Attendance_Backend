@@ -1,0 +1,111 @@
+// Pay monitoring (payroll tier BASIC). FULL tier tables are deferred; see docs/database-schema.md §11.
+
+/// Effective-dated rate. Revisions close the previous row (effective_to) and insert a new one.
+model EmployeeSalaryAssignment {
+  id             String      @id @default(uuid(7)) @db.Uuid
+  tenantId       String      @map("tenant_id") @db.Uuid
+  employeeId     String      @map("employee_id") @db.Uuid
+  employee       Employee    @relation(fields: [employeeId], references: [id])
+  salaryBasis    SalaryBasis @map("salary_basis")
+  amount         Decimal     @db.Decimal(14, 2)
+  effectiveFrom  DateTime    @map("effective_from") @db.Date
+  effectiveTo    DateTime?   @map("effective_to") @db.Date
+  otMultiplier   Decimal?    @map("ot_multiplier") @db.Decimal(4, 2)
+  revisionReason String      @map("revision_reason")
+  createdById    String?     @map("created_by_id") @db.Uuid
+  createdAt      DateTime    @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([tenantId, employeeId, effectiveFrom(sort: Desc)])
+  @@map("employee_salary_assignments")
+}
+
+/// One row per tenant per calendar month (month = first day of month).
+model PayPeriod {
+  id               String               @id @default(uuid(7)) @db.Uuid
+  tenantId         String               @map("tenant_id") @db.Uuid
+  month            DateTime             @db.Date
+  status           PayStatus            @default(OPEN)
+  lockedAt         DateTime?            @map("locked_at") @db.Timestamptz
+  lockedById       String?              @map("locked_by_id") @db.Uuid
+  lockWarnings     Json?                @map("lock_warnings")
+  unlockCount      Int                  @default(0) @map("unlock_count")
+  lastUnlockReason String?              @map("last_unlock_reason")
+  totals           Json                 @default("{}")
+  createdAt        DateTime             @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime             @updatedAt @map("updated_at") @db.Timestamptz
+  summaries        EmployeePaySummary[]
+  adjustments      PayAdjustment[]
+
+  @@unique([tenantId, month])
+  @@map("pay_periods")
+}
+
+/// DERIVED by the pay engine; frozen into `snapshot` when the month locks (input to the future FULL tier).
+model EmployeePaySummary {
+  id                String       @id @default(uuid(7)) @db.Uuid
+  tenantId          String       @map("tenant_id") @db.Uuid
+  employeeId        String       @map("employee_id") @db.Uuid
+  employee          Employee     @relation(fields: [employeeId], references: [id])
+  payPeriodId       String       @map("pay_period_id") @db.Uuid
+  payPeriod         PayPeriod    @relation(fields: [payPeriodId], references: [id])
+  periodStart       DateTime     @map("period_start") @db.Date
+  periodEnd         DateTime     @map("period_end") @db.Date
+  salaryBasis       SalaryBasis? @map("salary_basis")
+  rate              Decimal?     @db.Decimal(14, 2)
+  divisorMode       String       @map("divisor_mode")
+  divisor           Decimal      @db.Decimal(6, 2)
+  periodDays        Int          @map("period_days")
+  employedDays      Decimal      @map("employed_days") @db.Decimal(6, 2)
+  entitledDays      Decimal      @map("entitled_days") @db.Decimal(6, 2)
+  presentDays       Decimal      @map("present_days") @db.Decimal(6, 2)
+  halfDays          Decimal      @map("half_days") @db.Decimal(6, 2)
+  paidHolidayDays   Decimal      @map("paid_holiday_days") @db.Decimal(6, 2)
+  weeklyOffDays     Decimal      @map("weekly_off_days") @db.Decimal(6, 2)
+  paidLeaveDays     Decimal      @map("paid_leave_days") @db.Decimal(6, 2)
+  unpaidLeaveDays   Decimal      @map("unpaid_leave_days") @db.Decimal(6, 2)
+  absentDays        Decimal      @map("absent_days") @db.Decimal(6, 2)
+  lopDays           Decimal      @map("lop_days") @db.Decimal(6, 2)
+  payableDays       Decimal      @map("payable_days") @db.Decimal(6, 2)
+  workedMinutes     Int          @map("worked_minutes")
+  otApprovedMinutes Int          @map("ot_approved_minutes")
+  segments          Json         @default("[]")
+  baseEarned        Decimal      @map("base_earned") @db.Decimal(14, 2)
+  otEarned          Decimal      @map("ot_earned") @db.Decimal(14, 2)
+  additions         Decimal      @db.Decimal(14, 2)
+  deductions        Decimal      @db.Decimal(14, 2)
+  netEarned         Decimal      @map("net_earned") @db.Decimal(14, 2)
+  mtdThrough        DateTime?    @map("mtd_through") @db.Date
+  projectedNet      Decimal?     @map("projected_net") @db.Decimal(14, 2)
+  flags             String[]     @default([])
+  status            PayStatus    @default(OPEN)
+  snapshot          Json?
+  inputsHash        String       @map("inputs_hash")
+  engineVersion     String       @map("engine_version")
+  computedAt        DateTime     @map("computed_at") @db.Timestamptz
+  createdAt         DateTime     @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt         DateTime     @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@unique([employeeId, periodStart])
+  @@index([tenantId, payPeriodId, status])
+  @@map("employee_pay_summaries")
+}
+
+model PayAdjustment {
+  id          String    @id @default(uuid(7)) @db.Uuid
+  tenantId    String    @map("tenant_id") @db.Uuid
+  employeeId  String    @map("employee_id") @db.Uuid
+  payPeriodId String    @map("pay_period_id") @db.Uuid
+  payPeriod   PayPeriod @relation(fields: [payPeriodId], references: [id])
+  direction   String
+  label       String
+  amount      Decimal   @db.Decimal(14, 2)
+  reason      String
+  createdById String    @map("created_by_id") @db.Uuid
+  voidedAt    DateTime? @map("voided_at") @db.Timestamptz
+  voidedById  String?   @map("voided_by_id") @db.Uuid
+  voidReason  String?   @map("void_reason")
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([tenantId, payPeriodId, employeeId])
+  @@map("pay_adjustments")
+}

@@ -1,0 +1,221 @@
+// Policies, shifts, weekly offs, holiday calendars, per-employee day overrides and leave.
+
+model AttendancePolicy {
+  id                  String              @id @default(uuid(7)) @db.Uuid
+  tenantId            String              @map("tenant_id") @db.Uuid
+  name                String
+  version             Int                 @default(1)
+  hoursMode           HoursMode           @default(FIRST_IN_LAST_OUT) @map("hours_mode")
+  lateGraceMin        Int                 @default(10) @map("late_grace_min")
+  earlyLeaveGraceMin  Int                 @default(10) @map("early_leave_grace_min")
+  fullDayMinMinutes   Int?                @map("full_day_min_minutes")
+  halfDayMinMinutes   Int                 @default(240) @map("half_day_min_minutes")
+  missingOutTreatment MissingOutTreatment @default(ABSENT) @map("missing_out_treatment")
+  minPunchGapSec      Int                 @default(60) @map("min_punch_gap_sec")
+  blockMockLocation   Boolean             @default(true) @map("block_mock_location")
+  otMinMinutes        Int                 @default(30) @map("ot_min_minutes")
+  otRoundingMinutes   Int                 @default(15) @map("ot_rounding_minutes")
+  otDailyCapMinutes   Int                 @default(240) @map("ot_daily_cap_minutes")
+  otRequiresApproval  Boolean             @default(true) @map("ot_requires_approval")
+  active              Boolean             @default(true)
+  createdAt           DateTime            @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt           DateTime            @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@unique([tenantId, name])
+  @@map("attendance_policies")
+}
+
+/// start_time / end_time are local wall-clock "HH:mm" in the tenant timezone; overnight when end <= start.
+model Shift {
+  id                   String            @id @default(uuid(7)) @db.Uuid
+  tenantId             String            @map("tenant_id") @db.Uuid
+  name                 String
+  code                 String?
+  startTime            String            @map("start_time")
+  endTime              String            @map("end_time")
+  dutyMinutes          Int               @map("duty_minutes")
+  unpaidBreakMinutes   Int               @default(0) @map("unpaid_break_minutes")
+  isFlexible           Boolean           @default(false) @map("is_flexible")
+  windowBeforeStartMin Int               @default(120) @map("window_before_start_min")
+  windowAfterEndMin    Int               @default(360) @map("window_after_end_min")
+  policyId             String?           @map("policy_id") @db.Uuid
+  active               Boolean           @default(true)
+  createdAt            DateTime          @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt            DateTime          @updatedAt @map("updated_at") @db.Timestamptz
+  assignments          ShiftAssignment[]
+
+  @@unique([tenantId, name])
+  @@map("shifts")
+}
+
+model ShiftAssignment {
+  id            String    @id @default(uuid(7)) @db.Uuid
+  tenantId      String    @map("tenant_id") @db.Uuid
+  employeeId    String    @map("employee_id") @db.Uuid
+  employee      Employee  @relation(fields: [employeeId], references: [id])
+  shiftId       String    @map("shift_id") @db.Uuid
+  shift         Shift     @relation(fields: [shiftId], references: [id])
+  effectiveFrom DateTime  @map("effective_from") @db.Date
+  effectiveTo   DateTime? @map("effective_to") @db.Date
+  createdById   String?   @map("created_by_id") @db.Uuid
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([tenantId, employeeId, effectiveFrom(sort: Desc)])
+  @@index([tenantId, shiftId])
+  @@map("shift_assignments")
+}
+
+/// rules: [{ "dow": 0, "weeks": "ALL" }, { "dow": 6, "weeks": [2, 4] }]
+model WeeklyOffPattern {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  name      String
+  rules     Json
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@unique([tenantId, name])
+  @@map("weekly_off_patterns")
+}
+
+model HolidayCalendar {
+  id        String    @id @default(uuid(7)) @db.Uuid
+  tenantId  String    @map("tenant_id") @db.Uuid
+  name      String
+  isDefault Boolean   @default(false) @map("is_default")
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+  holidays  Holiday[]
+
+  @@unique([tenantId, name])
+  @@map("holiday_calendars")
+}
+
+model Holiday {
+  id          String          @id @default(uuid(7)) @db.Uuid
+  tenantId    String          @map("tenant_id") @db.Uuid
+  calendarId  String          @map("calendar_id") @db.Uuid
+  calendar    HolidayCalendar @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+  holidayDate DateTime        @map("holiday_date") @db.Date
+  name        String
+  kind        String          @default("COMPANY")
+  isPaid      Boolean         @default(true) @map("is_paid")
+  createdAt   DateTime        @default(now()) @map("created_at") @db.Timestamptz
+
+  @@unique([calendarId, holidayDate])
+  @@index([tenantId, holidayDate])
+  @@map("holidays")
+}
+
+/// live_key = "<employeeId>:<YYYY-MM-DD>" while not revoked → one live override per employee-day.
+model EmployeeDayOverride {
+  id           String    @id @default(uuid(7)) @db.Uuid
+  tenantId     String    @map("tenant_id") @db.Uuid
+  employeeId   String    @map("employee_id") @db.Uuid
+  overrideDate DateTime  @map("override_date") @db.Date
+  allowPunch   Boolean   @default(true) @map("allow_punch")
+  reason       String
+  createdById  String    @map("created_by_id") @db.Uuid
+  revokedAt    DateTime? @map("revoked_at") @db.Timestamptz
+  revokedById  String?   @map("revoked_by_id") @db.Uuid
+  liveKey      String?   @unique @map("live_key")
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([tenantId, overrideDate])
+  @@index([tenantId, employeeId, overrideDate])
+  @@map("employee_day_overrides")
+}
+
+model LeaveType {
+  id                  String      @id @default(uuid(7)) @db.Uuid
+  tenantId            String      @map("tenant_id") @db.Uuid
+  code                String
+  name                String
+  isPaid              Boolean     @map("is_paid")
+  allowHalfDay        Boolean     @default(true) @map("allow_half_day")
+  accrualMode         AccrualMode @default(NONE) @map("accrual_mode")
+  annualQuota         Decimal?    @map("annual_quota") @db.Decimal(6, 2)
+  monthlyAccrual      Decimal?    @map("monthly_accrual") @db.Decimal(6, 2)
+  carryForwardCap     Decimal?    @map("carry_forward_cap") @db.Decimal(6, 2)
+  maxNegativeBalance  Decimal     @default(0) @map("max_negative_balance") @db.Decimal(6, 2)
+  backdateLimitDays   Int         @default(7) @map("backdate_limit_days")
+  countNonWorkingDays Boolean     @default(false) @map("count_non_working_days")
+  active              Boolean     @default(true)
+  createdAt           DateTime    @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt           DateTime    @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@unique([tenantId, code])
+  @@map("leave_types")
+}
+
+model LeaveRequest {
+  id               String             @id @default(uuid(7)) @db.Uuid
+  tenantId         String             @map("tenant_id") @db.Uuid
+  employeeId       String             @map("employee_id") @db.Uuid
+  employee         Employee           @relation(fields: [employeeId], references: [id])
+  leaveTypeId      String             @map("leave_type_id") @db.Uuid
+  fromDate         DateTime           @map("from_date") @db.Date
+  fromPart         DayPart            @default(FULL) @map("from_part")
+  toDate           DateTime           @map("to_date") @db.Date
+  toPart           DayPart            @default(FULL) @map("to_part")
+  days             Decimal            @db.Decimal(6, 2)
+  reason           String
+  status           LeaveRequestStatus @default(PENDING)
+  appliedByActor   ActorType          @map("applied_by_actor")
+  appliedById      String?            @map("applied_by_id") @db.Uuid
+  decidedById      String?            @map("decided_by_id") @db.Uuid
+  decidedAt        DateTime?          @map("decided_at") @db.Timestamptz
+  decisionNote     String?            @map("decision_note")
+  cancelledByActor ActorType?         @map("cancelled_by_actor")
+  cancelledAt      DateTime?          @map("cancelled_at") @db.Timestamptz
+  createdAt        DateTime           @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime           @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@index([tenantId, employeeId, fromDate])
+  @@index([tenantId, status, fromDate])
+  @@map("leave_requests")
+}
+
+/// Append-only source of truth for balances. idempotency_key de-duplicates scheduled accruals.
+model LeaveLedger {
+  id             String         @id @default(uuid(7)) @db.Uuid
+  tenantId       String         @map("tenant_id") @db.Uuid
+  employeeId     String         @map("employee_id") @db.Uuid
+  leaveTypeId    String         @map("leave_type_id") @db.Uuid
+  leaveYear      Int            @map("leave_year")
+  entryType      LeaveEntryType @map("entry_type")
+  days           Decimal        @db.Decimal(6, 2)
+  periodKey      String?        @map("period_key")
+  leaveRequestId String?        @map("leave_request_id") @db.Uuid
+  reason         String?
+  actorType      ActorType      @map("actor_type")
+  actorId        String?        @map("actor_id") @db.Uuid
+  idempotencyKey String?        @unique @map("idempotency_key")
+  createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([tenantId, employeeId, leaveTypeId, leaveYear])
+  @@map("leave_ledger")
+}
+
+model LeaveBalance {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  tenantId    String   @map("tenant_id") @db.Uuid
+  employeeId  String   @map("employee_id") @db.Uuid
+  leaveTypeId String   @map("leave_type_id") @db.Uuid
+  leaveYear   Int      @map("leave_year")
+  opening     Decimal  @default(0) @db.Decimal(6, 2)
+  accrued     Decimal  @default(0) @db.Decimal(6, 2)
+  carriedIn   Decimal  @default(0) @map("carried_in") @db.Decimal(6, 2)
+  used        Decimal  @default(0) @db.Decimal(6, 2)
+  credited    Decimal  @default(0) @db.Decimal(6, 2)
+  adjusted    Decimal  @default(0) @db.Decimal(6, 2)
+  lapsed      Decimal  @default(0) @db.Decimal(6, 2)
+  balance     Decimal  @default(0) @db.Decimal(6, 2)
+  pending     Decimal  @default(0) @db.Decimal(6, 2)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@unique([employeeId, leaveTypeId, leaveYear])
+  @@index([tenantId, leaveYear])
+  @@map("leave_balances")
+}
