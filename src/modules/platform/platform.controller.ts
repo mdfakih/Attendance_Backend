@@ -1,10 +1,12 @@
-import { Controller, Get, Param, ParseUUIDPipe, Patch, Post } from '@nestjs/common';
+import { Controller, Get, Param, ParseUUIDPipe, Patch, Post, Put } from '@nestjs/common';
 import {
+  brandingSchema,
   createTenantSchema,
   isoDateSchema,
   loginSchema,
   paginationQuerySchema,
   planSchema,
+  platformFeatureSchema,
   reasonSchema,
   recordPaymentSchema,
   refreshSchema,
@@ -119,6 +121,23 @@ export class PlatformController {
   @Post('tenants/:id/resend-invite')
   resendInvite(@Param('id', ParseUUIDPipe) id: string, @ZBody(z.object({ email: emailSchema })) body: { email: string }) {
     return this.tenants.resendAdminInvite(id, body.email);
+  }
+
+  @Get('tenants/:id/features')
+  features(@Param('id', ParseUUIDPipe) id: string) {
+    return this.tenants.features(id);
+  }
+
+  @PlatformRoles('SUPERADMIN', 'SUPPORT')
+  @Put('tenants/:id/features')
+  setFeature(@Param('id', ParseUUIDPipe) id: string, @ZBody(platformFeatureSchema) body: z.infer<typeof platformFeatureSchema>) {
+    return this.tenants.setFeature(id, body);
+  }
+
+  @PlatformRoles('SUPERADMIN', 'SUPPORT')
+  @Put('tenants/:id/branding')
+  setBranding(@Param('id', ParseUUIDPipe) id: string, @ZBody(brandingSchema) body: z.infer<typeof brandingSchema>) {
+    return this.tenants.setBranding(id, body);
   }
 
   @Get('tenants/:id/usage')

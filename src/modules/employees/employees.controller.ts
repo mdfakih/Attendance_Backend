@@ -13,7 +13,7 @@ import {
 } from '@attendance/contracts';
 import type { Response } from 'express';
 import { z } from 'zod';
-import { RequirePermission, TenantApi } from '../../core/auth/decorators.js';
+import { RequireFeature, RequirePermission, TenantApi } from '../../core/auth/decorators.js';
 import { AppError } from '../../core/http/app-error.js';
 import { paged } from '../../core/http/envelope.js';
 import { RawResponse } from '../../core/http/envelope.interceptor.js';
@@ -166,6 +166,7 @@ export class EmployeesController {
     return this.devices.activationSelfieUrl(id);
   }
 
+  @RequireFeature('BULK_IMPORT')
   @RequirePermission('EMPLOYEES', 'create')
   @RawResponse()
   @Get('employee-imports/template')
@@ -173,6 +174,7 @@ export class EmployeesController {
     sendXlsx(res, 'employee-upload-template.xlsx', await this.imports.template());
   }
 
+  @RequireFeature('BULK_IMPORT')
   @RequirePermission('EMPLOYEES', 'create')
   @Post('employee-imports')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_UPLOAD_BYTES, files: 1 } }))
@@ -186,18 +188,21 @@ export class EmployeesController {
     return this.imports.upload(file.originalname, file.buffer);
   }
 
+  @RequireFeature('BULK_IMPORT')
   @RequirePermission('EMPLOYEES', 'create')
   @Get('employee-imports/:id')
   preview(@Param('id', ParseUUIDPipe) id: string) {
     return this.imports.preview(id);
   }
 
+  @RequireFeature('BULK_IMPORT')
   @RequirePermission('EMPLOYEES', 'create')
   @Post('employee-imports/:id/commit')
   commit(@Param('id', ParseUUIDPipe) id: string) {
     return this.imports.commit(id);
   }
 
+  @RequireFeature('BULK_IMPORT')
   @RequirePermission('EMPLOYEES', 'create')
   @Post('employee-imports/:id/cancel')
   async cancel(@Param('id', ParseUUIDPipe) id: string) {

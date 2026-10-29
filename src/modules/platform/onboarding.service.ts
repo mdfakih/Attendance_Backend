@@ -58,6 +58,7 @@ export class OnboardingService {
           timezone: input.timezone,
           payrollTier: input.payrollTier,
           employeeCap: input.employeeCap ?? plan.defaultEmployeeCap,
+          branding: input.branding ? { ...input.branding } : {},
           createdById: platformUserId,
         },
       });

@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { FEATURE_REGISTRY, FEATURE_KEYS, type FeatureToggleInput, type PaySettingsInput, type TenantSettingsInput } from '@attendance/contracts';
+import { featureViews, resolveBranding, type FeatureToggleInput, type PaySettingsInput, type TenantSettingsInput } from '@attendance/contracts';
 import { Decimal } from 'decimal.js';
 import { AuditService } from '../../core/audit/audit.service.js';
 import { PrincipalService } from '../../core/auth/principal.service.js';
@@ -7,6 +7,7 @@ import { requireContext, requireTenantId, requireTenantUser } from '../../core/c
 import { DbService } from '../../core/database/db.service.js';
 import { AppError, notFound } from '../../core/http/app-error.js';
 import { dateOnly, money } from '../../common/serialize.js';
+import { isUniqueViolation } from '../../common/unique-retry.js';
 import { addDays, localDateOf } from '../../engines/time/dates.js';
 import { AttendanceDayService } from '../attendance/attendance-day.service.js';
 
@@ -46,6 +47,7 @@ export class CompanyService {
         status: tenant.status,
         payrollTier: tenant.payrollTier,
         stateCode: tenant.stateCode,
+        branding: resolveBranding(tenant.branding),
       },
       features: ctx.features,
       settings: settings && this.settingsDto(settings),
@@ -105,18 +107,31 @@ export class CompanyService {
 
   async features() {
     const tenantId = requireTenantId();
-    const state = await this.principals.features(tenantId);
-    return FEATURE_KEYS.map((key) => ({ ...FEATURE_REGISTRY[key], enabled: state[key] }));
+    const [state, rows] = await Promise.all([
+      this.principals.features(tenantId),
+      this.db.tenant.tenantFeature.findMany({ where: { tenantId }, select: { key: true, lockedByPlatform: true } }),
+    ]);
+    return featureViews(state, rows);
   }
 
   async toggleFeature(input: FeatureToggleInput) {
     const tenantId = requireTenantId();
     const actor = requireContext().actor;
-    await this.db.tenant.tenantFeature.upsert({
-      where: { tenantId_key: { tenantId, key: input.key } },
-      update: { enabled: input.enabled, updatedByActor: actor.type, updatedById: actor.id },
-      create: { tenantId, key: input.key, enabled: input.enabled, updatedByActor: actor.type, updatedById: actor.id },
-    });
+    const data = { enabled: input.enabled, updatedByActor: actor.type, updatedById: actor.id };
+    // Conditional on the lock so a platform lock landing mid-request is never overwritten.
+    const updated = await this.db.tenant.tenantFeature.updateMany({ where: { tenantId, key: input.key, lockedByPlatform: false }, data });
+    if (updated.count === 0) {
+      const existing = await this.db.tenant.tenantFeature.findUnique({ where: { tenantId_key: { tenantId, key: input.key } } });
+      if (existing) throw new AppError('FEATURE_LOCKED');
+      try {
+        await this.db.tenant.tenantFeature.create({ data: { tenantId, key: input.key, ...data } });
+      } catch (error: unknown) {
+        if (!isUniqueViolation(error)) throw error;
+        // Someone created the row first; apply ours only if they did not lock it.
+        const retried = await this.db.tenant.tenantFeature.updateMany({ where: { tenantId, key: input.key, lockedByPlatform: false }, data });
+        if (retried.count === 0) throw new AppError('FEATURE_LOCKED');
+      }
+    }
     await this.db.tenant.tenantSettings.update({ where: { tenantId }, data: { featuresVersion: { increment: 1 } } });
     await this.audit.record({ action: 'tenant.feature.update', entityType: 'tenant_feature', entityId: tenantId, after: input });
     await this.principals.invalidateTenant(tenantId);

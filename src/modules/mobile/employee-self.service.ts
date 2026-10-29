@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import type { ConsentAcceptInput } from '@attendance/contracts';
+import { resolveBranding, type ConsentAcceptInput } from '@attendance/contracts';
 import { AuditService } from '../../core/audit/audit.service.js';
 import { PrincipalService } from '../../core/auth/principal.service.js';
 import { requireContext, requireEmployee, requireTenantId } from '../../core/context/request-context.js';
@@ -28,7 +28,7 @@ export class EmployeeSelfService {
         where: { id: employeeId },
         include: { branch: { select: { name: true } }, department: { select: { name: true } }, sites: { include: { site: { select: { id: true, name: true } } } } },
       }),
-      this.db.platform.tenant.findUniqueOrThrow({ where: { id: tenantId }, select: { displayName: true, timezone: true } }),
+      this.db.platform.tenant.findUniqueOrThrow({ where: { id: tenantId }, select: { displayName: true, timezone: true, branding: true } }),
       this.db.tenant.deviceBinding.findUnique({ where: { id: bindingId }, select: { model: true, manufacturer: true, activatedAt: true } }),
       this.currentNotice(),
     ]);
@@ -49,7 +49,7 @@ export class EmployeeSelfService {
         dateOfJoining: dateOnly(employee.dateOfJoining),
         sites: employee.sites.map((s) => s.site),
       },
-      company: { name: tenant.displayName, timezone: tenant.timezone },
+      company: { name: tenant.displayName, timezone: tenant.timezone, branding: resolveBranding(tenant.branding) },
       device: binding && { model: `${binding.manufacturer} ${binding.model}`.trim(), activatedAt: iso(binding.activatedAt) },
       features: requireContext().features,
       consent: { required: !consentOk, notice: notice && { id: notice.id, title: notice.title, bodyMd: notice.bodyMd, purposes: notice.purposes, version: notice.version } },

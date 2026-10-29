@@ -8,6 +8,7 @@ import { ZBody, ZQuery } from '../../core/http/zod.js';
 import { PayService } from './pay.service.js';
 
 @TenantApi()
+@RequireFeature('PAY_MONITORING')
 @Controller('v1/tenant/pay')
 export class PayController {
   constructor(private readonly pay: PayService) {}

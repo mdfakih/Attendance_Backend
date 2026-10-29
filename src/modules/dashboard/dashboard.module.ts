@@ -1,7 +1,7 @@
 import { Controller, Get, Module } from '@nestjs/common';
 import { dashboardQuerySchema } from '@attendance/contracts';
 import type { z } from 'zod';
-import { RequirePermission, TenantApi } from '../../core/auth/decorators.js';
+import { RequireFeature, RequirePermission, TenantApi } from '../../core/auth/decorators.js';
 import { ZQuery } from '../../core/http/zod.js';
 import { AttendanceModule } from '../attendance/attendance.module.js';
 import { HousekeepingModule } from '../housekeeping/housekeeping.module.js';
@@ -23,6 +23,7 @@ export class DashboardController {
     return this.dashboard.live(q);
   }
 
+  @RequireFeature('LIVE_MAP')
   @Get('map')
   map(@ZQuery(dashboardQuerySchema) q: z.infer<typeof dashboardQuerySchema>) {
     return this.dashboard.map(q);
