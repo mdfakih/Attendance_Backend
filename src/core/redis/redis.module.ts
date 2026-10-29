@@ -19,7 +19,9 @@ class RedisLifecycle implements OnModuleDestroy {
     {
       provide: REDIS,
       inject: [ENV],
-      useFactory: (env: Env) => new Redis(env.REDIS_URL, { maxRetriesPerRequest: null, lazyConnect: false }),
+      // Commands fail after a few reconnect attempts instead of waiting forever, so a wrong REDIS_URL
+      // or a Redis outage shows up as errors rather than hung requests.
+      useFactory: (env: Env) => new Redis(env.REDIS_URL, { maxRetriesPerRequest: 3, connectTimeout: 10_000, lazyConnect: false }),
     },
     RedisLifecycle,
   ],
