@@ -59,9 +59,23 @@ export type Env = z.infer<typeof envSchema>;
 
 export const ENV = Symbol('ENV');
 
+/**
+ * Neon Object Storage (and the AWS SDKs) name the storage settings AWS_*; `neon env pull` writes them
+ * that way. Use them for any S3_* variable that is not set.
+ */
+function withStorageAliases(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return {
+    ...source,
+    S3_ENDPOINT: source['S3_ENDPOINT'] || source['AWS_ENDPOINT_URL_S3'],
+    S3_REGION: source['S3_REGION'] || source['AWS_REGION'],
+    S3_ACCESS_KEY: source['S3_ACCESS_KEY'] || source['AWS_ACCESS_KEY_ID'],
+    S3_SECRET_KEY: source['S3_SECRET_KEY'] || source['AWS_SECRET_ACCESS_KEY'],
+  };
+}
+
 /** Parses the environment and fails fast with every missing/invalid variable listed. */
 export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
-  const result = envSchema.safeParse(source);
+  const result = envSchema.safeParse(withStorageAliases(source));
   if (!result.success) {
     const problems = result.error.issues
       .map((issue) => `  - ${issue.path.join('.')}: ${issue.message}`)
