@@ -30,3 +30,7 @@ infra/.data/
 *.log
 .DS_Store
 Thumbs.db
+
+# Firebase service-account keys for FCM (use FCM_SERVICE_ACCOUNT_PATH / _JSON instead)
+*service-account*.json
+*firebase-adminsdk*.json
