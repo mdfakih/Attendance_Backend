@@ -51,6 +51,8 @@ model Tenant {
   payrollTier          PayrollTier     @default(BASIC) @map("payroll_tier")
   employeeCap          Int?            @map("employee_cap")
   supportAccessAllowed Boolean         @default(true) @map("support_access_allowed")
+  /// Brand colours and logo for the client's dashboard and employee app; see `Branding` in contracts.
+  branding             Json            @default("{}")
   createdById          String?         @map("created_by_id") @db.Uuid
   createdAt            DateTime        @default(now()) @map("created_at") @db.Timestamptz
   updatedAt            DateTime        @updatedAt @map("updated_at") @db.Timestamptz
@@ -89,14 +91,16 @@ model TenantSettings {
 }
 
 model TenantFeature {
-  tenantId       String     @map("tenant_id") @db.Uuid
-  tenant         Tenant     @relation(fields: [tenantId], references: [id])
-  key            String
-  enabled        Boolean
-  config         Json       @default("{}")
-  updatedByActor ActorType? @map("updated_by_actor")
-  updatedById    String?    @map("updated_by_id") @db.Uuid
-  updatedAt      DateTime   @updatedAt @map("updated_at") @db.Timestamptz
+  tenantId         String     @map("tenant_id") @db.Uuid
+  tenant           Tenant     @relation(fields: [tenantId], references: [id])
+  key              String
+  enabled          Boolean
+  /// Set by the platform team; the client's Admin cannot change a locked feature.
+  lockedByPlatform Boolean    @default(false) @map("locked_by_platform")
+  config           Json       @default("{}")
+  updatedByActor   ActorType? @map("updated_by_actor")
+  updatedById      String?    @map("updated_by_id") @db.Uuid
+  updatedAt        DateTime   @updatedAt @map("updated_at") @db.Timestamptz
 
   @@id([tenantId, key])
   @@map("tenant_features")

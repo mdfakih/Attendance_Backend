@@ -10,7 +10,7 @@ import {
   revokeMarkSchema,
 } from '@attendance/contracts';
 import type { z } from 'zod';
-import { RequirePermission, TenantApi } from '../../core/auth/decorators.js';
+import { RequireFeature, RequirePermission, TenantApi } from '../../core/auth/decorators.js';
 import { paged } from '../../core/http/envelope.js';
 import { ZBody, ZQuery } from '../../core/http/zod.js';
 import { AttendanceMarkService } from './attendance-mark.service.js';
@@ -71,6 +71,7 @@ export class AttendanceController {
   }
 
   /** Employees' requests to count time worked outside working hours. */
+  @RequireFeature('EXTRA_TIME')
   @RequirePermission('ATTENDANCE', 'view')
   @Get('regularizations')
   async regularizationList(@ZQuery(regularizationListQuerySchema) q: z.infer<typeof regularizationListQuerySchema>) {
@@ -78,6 +79,7 @@ export class AttendanceController {
     return paged(items, { page: q.page, pageSize: q.pageSize, total });
   }
 
+  @RequireFeature('EXTRA_TIME')
   @RequirePermission('ATTENDANCE', 'edit')
   @Post('regularizations/:id/decision')
   decideRegularization(@Param('id', ParseUUIDPipe) id: string, @ZBody(regularizationDecisionSchema) body: z.infer<typeof regularizationDecisionSchema>) {

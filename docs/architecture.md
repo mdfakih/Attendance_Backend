@@ -142,8 +142,20 @@ Rejected:
 | PAYROLL | PLATFORM (superadmin, per plan) | on, `{tier: "BASIC"}` | `tier: BASIC \| FULL`. FULL is listed in the registry but `available: false` until built; the console disables it |
 | LEAVE | TENANT | off | `year_start_month` (1), backdate/advance limits |
 | OVERTIME | TENANT | off | none (rule details in attendance_policies) |
+| EXTRA_TIME | TENANT | on | none (gates the regularization routes, web and app) |
+| LIVE_MAP | TENANT | on | none (gates `dashboard/map`) |
+| PAY_MONITORING | TENANT | on | none (gates `/tenant/pay/*` and the salary-register export) |
+| EXPORTS | TENANT | on | none (gates `/tenant/exports/*`) |
+| BULK_IMPORT | TENANT | on | none (gates `/tenant/employee-imports/*`) |
 | DEVICE_APPROVAL | TENANT | off | none (approvers = permission DEVICES.edit) |
 | AUTO_EMAIL_ACTIVATION_CODES | TENANT | off | none |
+| EMPLOYEE_EARNINGS_VIEW | TENANT | off | requires PAY_MONITORING |
+
+- **Platform control.** Every feature is a MODULE (a whole area) or an OPTION (behaviour of an area). The console sets any feature per client with
+  `PUT /v1/platform/tenants/:id/features {key, enabled, locked}`; `locked` (`tenant_features.locked_by_platform`) stops the client's Admin from
+  changing it (`FEATURE_LOCKED`). Both sides read `{…definition, enabled, locked}` from `GET …/features`.
+- **Branding.** `tenants.branding` (jsonb: `primaryColor`, `accentColor`, `logoUrl`) is set from the console with `PUT /v1/platform/tenants/:id/branding`
+  and returned, defaults filled in, by `/tenant/me` (`tenant.branding`) and `/mobile/me` (`company.branding`). The web dashboard and the app theme from it.
 
 - **Enforcement.**
   - `@RequireFeature(F.LEAVE)` guard returns 404 `FEATURE_DISABLED`; `@RequirePayTier('BASIC')` guards pay routes.

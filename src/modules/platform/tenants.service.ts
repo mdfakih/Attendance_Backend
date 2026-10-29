@@ -1,5 +1,14 @@
 import { Inject, Injectable } from '@nestjs/common';
-import type { TenantStatus, UpdateTenantInput } from '@attendance/contracts';
+import {
+  featureViews,
+  FEATURE_REGISTRY,
+  resolveBranding,
+  type BrandingInput,
+  type FeatureView,
+  type PlatformFeatureInput,
+  type TenantStatus,
+  type UpdateTenantInput,
+} from '@attendance/contracts';
 import { AuditService } from '../../core/audit/audit.service.js';
 import { PrincipalService } from '../../core/auth/principal.service.js';
 import { ENV, type Env } from '../../core/config/env.js';
@@ -8,6 +17,7 @@ import { DbService } from '../../core/database/db.service.js';
 import { AppError, notFound } from '../../core/http/app-error.js';
 import { NotifyService } from '../../core/notify/notify.service.js';
 import { HousekeepingService } from '../housekeeping/housekeeping.service.js';
+import { requireContext } from '../../core/context/request-context.js';
 import { dateOnly, iso, money } from '../../common/serialize.js';
 import type { Prisma } from '../../generated/prisma/client.js';
 import { assertTierAvailable } from './onboarding.service.js';
@@ -69,6 +79,7 @@ export class TenantsService {
       status: t.status,
       payrollTier: t.payrollTier,
       employeeCap: t.employeeCap,
+      branding: resolveBranding(t.branding),
       employees: countMap.get(t.id) ?? 0,
       plan: t.subscription?.plan.name ?? null,
       subscriptionStatus: t.subscription?.status ?? null,
@@ -114,6 +125,7 @@ export class TenantsService {
       statusReason: tenant.statusReason,
       payrollTier: tenant.payrollTier,
       employeeCap: tenant.employeeCap,
+      branding: resolveBranding(tenant.branding),
       createdAt: iso(tenant.createdAt),
       employees: { active, invited },
       admins: admins.map((a) => ({ email: a.user.email, fullName: a.user.fullName, lastLoginAt: iso(a.user.lastLoginAt) })),
@@ -227,6 +239,70 @@ export class TenantsService {
       text: `Set up your account here (valid for 7 days):\n${inviteLink}\n`,
     });
     return { inviteLink };
+  }
+
+  /** Every module and option for a client, with whether the platform team has locked it. */
+  async features(tenantId: string): Promise<FeatureView[]> {
+    await this.assertExists(tenantId);
+    const [state, rows] = await Promise.all([
+      this.principals.features(tenantId),
+      this.db.platform.tenantFeature.findMany({ where: { tenantId }, select: { key: true, lockedByPlatform: true } }),
+    ]);
+    return featureViews(state, rows);
+  }
+
+  async setFeature(tenantId: string, input: PlatformFeatureInput): Promise<FeatureView[]> {
+    await this.assertExists(tenantId);
+    const actor = requireContext().actor;
+    const before = await this.db.platform.tenantFeature.findUnique({ where: { tenantId_key: { tenantId, key: input.key } } });
+    const actorFields = { updatedByActor: actor.type, updatedById: actor.id };
+    // Only the fields sent change, so locking never rewrites the stored on/off value.
+    await this.db.platform.tenantFeature.upsert({
+      where: { tenantId_key: { tenantId, key: input.key } },
+      update: {
+        ...(input.enabled !== undefined && { enabled: input.enabled }),
+        ...(input.locked !== undefined && { lockedByPlatform: input.locked }),
+        ...actorFields,
+      },
+      create: {
+        tenantId,
+        key: input.key,
+        enabled: input.enabled ?? FEATURE_REGISTRY[input.key].defaultEnabled,
+        lockedByPlatform: input.locked ?? false,
+        ...actorFields,
+      },
+    });
+    await this.db.platform.tenantSettings.updateMany({ where: { tenantId }, data: { featuresVersion: { increment: 1 } } });
+    await this.audit.record({
+      action: 'platform.tenant.feature.update',
+      entityType: 'tenant_feature',
+      entityId: tenantId,
+      before: before ? { key: before.key, enabled: before.enabled, locked: before.lockedByPlatform } : undefined,
+      after: { ...input, label: FEATURE_REGISTRY[input.key].label },
+      tenantId,
+    });
+    await this.principals.invalidateTenant(tenantId);
+    return this.features(tenantId);
+  }
+
+  async setBranding(tenantId: string, input: BrandingInput) {
+    const before = await this.assertExists(tenantId);
+    await this.db.platform.tenant.update({ where: { id: tenantId }, data: { branding: { ...input } } });
+    await this.audit.record({
+      action: 'platform.tenant.branding.update',
+      entityType: 'tenant',
+      entityId: tenantId,
+      before: resolveBranding(before.branding),
+      after: input,
+      tenantId,
+    });
+    return resolveBranding(input);
+  }
+
+  private async assertExists(tenantId: string) {
+    const tenant = await this.db.platform.tenant.findUnique({ where: { id: tenantId } });
+    if (!tenant) throw notFound('Tenant');
+    return tenant;
   }
 
   async usage(tenantId: string) {

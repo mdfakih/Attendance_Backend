@@ -2,7 +2,7 @@ import { Controller, Get, Module, Param, ParseUUIDPipe, Post, Res } from '@nestj
 import { exportRequestSchema } from '@attendance/contracts';
 import type { Response } from 'express';
 import type { z } from 'zod';
-import { RequirePermission, TenantApi } from '../../core/auth/decorators.js';
+import { RequireFeature, RequirePermission, TenantApi } from '../../core/auth/decorators.js';
 import { RawResponse } from '../../core/http/envelope.interceptor.js';
 import { ZBody } from '../../core/http/zod.js';
 import { AttendanceModule } from '../attendance/attendance.module.js';
@@ -12,6 +12,7 @@ import { ExportsService } from './exports.service.js';
 import { ExportGenerators } from './generators.js';
 
 @TenantApi()
+@RequireFeature('EXPORTS')
 @Controller('v1/tenant/exports')
 export class ExportsController {
   constructor(private readonly exports: ExportsService) {}

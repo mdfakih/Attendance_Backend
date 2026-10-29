@@ -1,5 +1,7 @@
 import { z } from 'zod';
+import { brandingSchema } from '../branding.js';
 import { PAYMENT_METHODS, PAYROLL_TIERS, PLATFORM_ROLES, SUBSCRIPTION_STATUSES } from '../enums.js';
+import { FEATURE_KEYS } from '../features.js';
 import { emailSchema, isoDateSchema, moneySchema, reasonSchema } from './common.js';
 
 const stateCodeSchema = z.string().regex(/^[A-Z]{2}$/, 'Use the 2-letter state code, e.g. MH');
@@ -29,6 +31,7 @@ export const createTenantSchema = z.object({
     fullName: z.string().trim().min(2).max(120),
     email: emailSchema,
   }),
+  branding: brandingSchema.optional(),
 });
 export type CreateTenantInput = z.infer<typeof createTenantSchema>;
 
@@ -42,6 +45,19 @@ export const updateTenantSchema = z.object({
   employeeCap: z.coerce.number().int().min(1).max(100000).nullable().optional(),
 });
 export type UpdateTenantInput = z.infer<typeof updateTenantSchema>;
+
+/**
+ * Platform team switching a client's module or option on/off, and/or locking it so the client's Admin
+ * cannot change it. Omitted fields keep their stored value.
+ */
+export const platformFeatureSchema = z
+  .object({
+    key: z.enum(FEATURE_KEYS),
+    enabled: z.boolean().optional(),
+    locked: z.boolean().optional(),
+  })
+  .refine((v) => v.enabled !== undefined || v.locked !== undefined, 'Send enabled, locked or both.');
+export type PlatformFeatureInput = z.infer<typeof platformFeatureSchema>;
 
 export const tenantStatusChangeSchema = z.object({ reason: reasonSchema });
 

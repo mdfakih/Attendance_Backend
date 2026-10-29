@@ -13,6 +13,7 @@ export const ERROR_CODES = {
   ACCOUNT_LOCKED: { status: 423, message: 'Too many attempts. Try again later.' },
   FORBIDDEN: { status: 403, message: 'You do not have permission to do this.' },
   FEATURE_DISABLED: { status: 404, message: 'This feature is not enabled for your company.' },
+  FEATURE_LOCKED: { status: 403, message: 'This module is managed by your service provider.' },
   NOT_FOUND: { status: 404, message: 'Not found.' },
   CONFLICT: { status: 409, message: 'This conflicts with existing data.' },
   RATE_LIMITED: { status: 429, message: 'Too many requests. Please wait and try again.' },

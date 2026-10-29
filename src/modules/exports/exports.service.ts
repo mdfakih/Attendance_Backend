@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import type { ExportRequestInput } from '@attendance/contracts';
 import { AuditService } from '../../core/audit/audit.service.js';
 import { employeeScopeWhere } from '../../core/auth/scope.js';
-import { requireContext, requireTenantId, requireTenantUser } from '../../core/context/request-context.js';
+import { currentContext, requireContext, requireTenantId, requireTenantUser } from '../../core/context/request-context.js';
 import { DbService } from '../../core/database/db.service.js';
 import { AppError, notFound } from '../../core/http/app-error.js';
 import { StorageService } from '../../core/storage/storage.service.js';
@@ -43,6 +43,10 @@ export class ExportsService {
     if (needsMonth && !input.month) throw new AppError('VALIDATION_FAILED', 'Choose a month.');
     if (input.type === 'ATTENDANCE_DAILY' && !input.date) throw new AppError('VALIDATION_FAILED', 'Choose a date.');
     if (input.type === 'PUNCH_LOG' && !(input.from && input.to)) throw new AppError('VALIDATION_FAILED', 'Choose a date range.');
+    const features = currentContext()?.features;
+    if ((input.type === 'SALARY_REGISTER' && features?.PAY_MONITORING === false) || (input.type === 'LEAVE_REGISTER' && features?.LEAVE === false)) {
+      throw new AppError('FEATURE_DISABLED');
+    }
     const job = await this.db.tenant.exportJob.create({
       data: {
         tenantId: requireTenantId(),

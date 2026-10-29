@@ -14,7 +14,7 @@ import {
   selfieUploadRequestSchema,
 } from '@attendance/contracts';
 import { z } from 'zod';
-import { AllowWithoutConsent, EmployeeApi, Public } from '../../core/auth/decorators.js';
+import { AllowWithoutConsent, EmployeeApi, Public, RequireFeature } from '../../core/auth/decorators.js';
 import { requireEmployee } from '../../core/context/request-context.js';
 import { ZBody, ZQuery } from '../../core/http/zod.js';
 import { RegularizationService } from '../attendance/regularization.service.js';
@@ -117,16 +117,19 @@ export class MobileController {
   }
 
   /** Days with time outside working hours and the employee's request to count it. */
+  @RequireFeature('EXTRA_TIME')
   @Get('regularizations')
   regularizationMonth(@ZQuery(employeeMonthQuerySchema) q: z.infer<typeof employeeMonthQuerySchema>) {
     return this.regularizations.employeeMonth(q.month);
   }
 
+  @RequireFeature('EXTRA_TIME')
   @Post('regularizations')
   requestRegularization(@ZBody(regularizationRequestSchema) body: z.infer<typeof regularizationRequestSchema>) {
     return this.regularizations.request(body);
   }
 
+  @RequireFeature('EXTRA_TIME')
   @Post('regularizations/:id/cancel')
   cancelRegularization(@Param('id', ParseUUIDPipe) id: string) {
     return this.regularizations.cancel(id);

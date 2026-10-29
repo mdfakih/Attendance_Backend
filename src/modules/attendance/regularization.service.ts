@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import type { RegularizationDecisionInput, RegularizationListQuery, RegularizationRequestInput } from '@attendance/contracts';
 import { AuditService } from '../../core/audit/audit.service.js';
 import { employeeScopeWhere, isInScope } from '../../core/auth/scope.js';
-import { requireEmployee, requireTenantId, requireTenantUser } from '../../core/context/request-context.js';
+import { currentContext, requireEmployee, requireTenantId, requireTenantUser } from '../../core/context/request-context.js';
 import { DbService } from '../../core/database/db.service.js';
 import { AppError, notFound } from '../../core/http/app-error.js';
 import { NotifyService } from '../../core/notify/notify.service.js';
@@ -112,6 +112,8 @@ export class RegularizationService {
   /** Tells the employee once per day when a punch leaves time outside working hours that needs a request. */
   async noticeOutsideTime(employeeId: string, written: WrittenDay | null): Promise<void> {
     if (!written || written.result.regState !== 'AVAILABLE' || written.previousRegState === 'AVAILABLE') return;
+    // Nothing to ask for when the client has extra time requests switched off.
+    if (currentContext()?.features?.EXTRA_TIME === false) return;
     await this.notify.employee({
       tenantId: requireTenantId(),
       employeeId,
