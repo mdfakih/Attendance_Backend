@@ -44,7 +44,7 @@ export const deviceInfoSchema = z.object({
   model: z.string().max(80).default(''),
   osVersion: z.string().max(40).default(''),
   appVersion: z.string().max(40).default(''),
-  androidId: z.string().max(64).optional(),
+  androidId: z.string().max(64).nullish(),
 });
 export type DeviceInfo = z.infer<typeof deviceInfoSchema>;
 
@@ -57,7 +57,8 @@ export const mobileActivateSchema = z.object({
   /** Base64 DER ECDSA signature over `v1|ACTIVATE|<nonce>|<phone>`. */
   signature: z.string().min(40).max(200),
   device: deviceInfoSchema,
-  fcmToken: z.string().max(4096).optional(),
+  /** Null or absent when the phone has no push token (Firebase not set up, or the fetch failed). */
+  fcmToken: z.string().max(4096).nullish(),
 });
 export type MobileActivateInput = z.infer<typeof mobileActivateSchema>;
 
