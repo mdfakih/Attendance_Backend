@@ -63,6 +63,13 @@ export type AttendanceStatus = (typeof ATTENDANCE_STATUSES)[number];
 export const MANUAL_MARK_STATUSES = ['PRESENT', 'ABSENT', 'HALF_DAY', 'LEAVE', 'WEEKLY_OFF', 'HOLIDAY'] as const;
 export type ManualMarkStatus = (typeof MANUAL_MARK_STATUSES)[number];
 
+/** Where a day stands on counting its outside-hours time. */
+export const REG_STATES = ['NOT_APPLICABLE', 'AVAILABLE', 'REQUESTED', 'APPROVED', 'REJECTED'] as const;
+export type RegState = (typeof REG_STATES)[number];
+
+export const REG_REQUEST_STATUSES = ['PENDING', 'APPROVED', 'REJECTED', 'CANCELLED'] as const;
+export type RegRequestStatus = (typeof REG_REQUEST_STATUSES)[number];
+
 export const PUNCH_DIRECTIONS = ['IN', 'OUT'] as const;
 export type PunchDirection = (typeof PUNCH_DIRECTIONS)[number];
 

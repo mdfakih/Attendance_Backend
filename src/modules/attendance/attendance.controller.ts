@@ -5,15 +5,17 @@ import {
   employeeMonthQuerySchema,
   isoDateSchema,
   manualMarkSchema,
-  overtimeDecisionSchema,
+  regularizationDecisionSchema,
+  regularizationListQuerySchema,
   revokeMarkSchema,
 } from '@attendance/contracts';
 import type { z } from 'zod';
-import { RequireFeature, RequirePermission, TenantApi } from '../../core/auth/decorators.js';
+import { RequirePermission, TenantApi } from '../../core/auth/decorators.js';
 import { paged } from '../../core/http/envelope.js';
 import { ZBody, ZQuery } from '../../core/http/zod.js';
 import { AttendanceMarkService } from './attendance-mark.service.js';
 import { AttendanceQueryService } from './attendance-query.service.js';
+import { RegularizationService } from './regularization.service.js';
 
 @TenantApi()
 @Controller('v1/tenant/attendance')
@@ -21,6 +23,7 @@ export class AttendanceController {
   constructor(
     private readonly query: AttendanceQueryService,
     private readonly marks: AttendanceMarkService,
+    private readonly regularizations: RegularizationService,
   ) {}
 
   @RequirePermission('ATTENDANCE', 'view')
@@ -67,17 +70,17 @@ export class AttendanceController {
     return this.marks.revoke(body);
   }
 
-  @RequireFeature('OVERTIME')
+  /** Employees' requests to count time worked outside working hours. */
   @RequirePermission('ATTENDANCE', 'view')
-  @Get('overtime/pending')
-  pendingOvertime() {
-    return this.marks.pendingOvertime();
+  @Get('regularizations')
+  async regularizationList(@ZQuery(regularizationListQuerySchema) q: z.infer<typeof regularizationListQuerySchema>) {
+    const { items, total } = await this.regularizations.list(q);
+    return paged(items, { page: q.page, pageSize: q.pageSize, total });
   }
 
-  @RequireFeature('OVERTIME')
   @RequirePermission('ATTENDANCE', 'edit')
-  @Post('overtime/decisions')
-  decide(@ZBody(overtimeDecisionSchema) body: z.infer<typeof overtimeDecisionSchema>) {
-    return this.marks.decideOvertime(body);
+  @Post('regularizations/:id/decision')
+  decideRegularization(@Param('id', ParseUUIDPipe) id: string, @ZBody(regularizationDecisionSchema) body: z.infer<typeof regularizationDecisionSchema>) {
+    return this.regularizations.decide(id, body);
   }
 }

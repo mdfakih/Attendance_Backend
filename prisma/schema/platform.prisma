@@ -63,23 +63,27 @@ model Tenant {
 }
 
 model TenantSettings {
-  tenantId              String   @id @map("tenant_id") @db.Uuid
-  tenant                Tenant   @relation(fields: [tenantId], references: [id])
-  payableDaysBasis      String   @default("CALENDAR") @map("payable_days_basis")
-  netPayRounding        String   @default("NEAREST_RUPEE") @map("net_pay_rounding")
-  defaultOtMultiplier   Decimal  @default(1.5) @map("default_ot_multiplier") @db.Decimal(4, 2)
-  activationCodeTtlDays Int      @default(7) @map("activation_code_ttl_days")
-  defaultSiteRadiusM    Int      @default(100) @map("default_site_radius_m")
-  defaultMaxAccuracyM   Int      @default(100) @map("default_max_accuracy_m")
-  accuracyBufferCapM    Int      @default(25) @map("accuracy_buffer_cap_m")
-  selfieRetentionDays   Int      @default(90) @map("selfie_retention_days")
-  exitedPurgeDays       Int      @default(180) @map("exited_purge_days")
-  missingOutReminder    Boolean  @default(true) @map("missing_out_reminder")
-  defaultPolicyId       String?  @map("default_policy_id") @db.Uuid
-  defaultCalendarId     String?  @map("default_calendar_id") @db.Uuid
-  defaultPatternId      String?  @map("default_pattern_id") @db.Uuid
-  featuresVersion       Int      @default(1) @map("features_version")
-  updatedAt             DateTime @updatedAt @map("updated_at") @db.Timestamptz
+  tenantId              String    @id @map("tenant_id") @db.Uuid
+  tenant                Tenant    @relation(fields: [tenantId], references: [id])
+  payableDaysBasis      String    @default("CALENDAR") @map("payable_days_basis")
+  netPayRounding        String    @default("NEAREST_RUPEE") @map("net_pay_rounding")
+  defaultOtMultiplier   Decimal   @default(1.5) @map("default_ot_multiplier") @db.Decimal(4, 2)
+  activationCodeTtlDays Int       @default(7) @map("activation_code_ttl_days")
+  defaultSiteRadiusM    Int       @default(100) @map("default_site_radius_m")
+  defaultMaxAccuracyM   Int       @default(100) @map("default_max_accuracy_m")
+  accuracyBufferCapM    Int       @default(25) @map("accuracy_buffer_cap_m")
+  selfieRetentionDays   Int       @default(90) @map("selfie_retention_days")
+  exitedPurgeDays       Int       @default(180) @map("exited_purge_days")
+  missingOutReminder    Boolean   @default(true) @map("missing_out_reminder")
+  defaultPolicyId       String?   @map("default_policy_id") @db.Uuid
+  defaultCalendarId     String?   @map("default_calendar_id") @db.Uuid
+  defaultPatternId      String?   @map("default_pattern_id") @db.Uuid
+  /// Company-wide working hours; a branch default and then an employee assignment override it.
+  defaultShiftId        String?   @map("default_shift_id") @db.Uuid
+  /// Local date the once-a-day housekeeping last ran for this tenant.
+  housekeptOn           DateTime? @map("housekept_on") @db.Date
+  featuresVersion       Int       @default(1) @map("features_version")
+  updatedAt             DateTime  @updatedAt @map("updated_at") @db.Timestamptz
 
   @@map("tenant_settings")
 }
@@ -173,18 +177,18 @@ model SubscriptionCharge {
 }
 
 model Payment {
-  id          String              @id @default(uuid(7)) @db.Uuid
-  tenantId    String              @map("tenant_id") @db.Uuid
-  chargeId    String?             @map("charge_id") @db.Uuid
-  charge      SubscriptionCharge? @relation(fields: [chargeId], references: [id])
-  amount      Decimal             @db.Decimal(14, 2)
-  method      String
-  referenceNo String?             @map("reference_no")
-  receivedOn  DateTime            @map("received_on") @db.Date
-  recordedById String             @map("recorded_by_id") @db.Uuid
-  notes       String?
-  status      String              @default("RECORDED")
-  createdAt   DateTime            @default(now()) @map("created_at") @db.Timestamptz
+  id           String              @id @default(uuid(7)) @db.Uuid
+  tenantId     String              @map("tenant_id") @db.Uuid
+  chargeId     String?             @map("charge_id") @db.Uuid
+  charge       SubscriptionCharge? @relation(fields: [chargeId], references: [id])
+  amount       Decimal             @db.Decimal(14, 2)
+  method       String
+  referenceNo  String?             @map("reference_no")
+  receivedOn   DateTime            @map("received_on") @db.Date
+  recordedById String              @map("recorded_by_id") @db.Uuid
+  notes        String?
+  status       String              @default("RECORDED")
+  createdAt    DateTime            @default(now()) @map("created_at") @db.Timestamptz
 
   @@index([tenantId, receivedOn(sort: Desc)])
   @@map("payments")

@@ -5,8 +5,7 @@ import { ENV, type Env } from '../../core/config/env.js';
 import { randomToken, sha256Hex } from '../../core/crypto/crypto.util.js';
 import { DbService, type PlatformTx } from '../../core/database/db.service.js';
 import { AppError } from '../../core/http/app-error.js';
-import { QUEUE } from '../../core/queue/queues.js';
-import { QueueService } from '../../core/queue/queue.service.js';
+import { NotifyService } from '../../core/notify/notify.service.js';
 import { addDays, localDateOf, toDbDate } from '../../engines/time/dates.js';
 
 export const DEFAULT_MANAGER_PERMISSIONS: PermissionSet = {
@@ -37,7 +36,7 @@ export class OnboardingService {
     @Inject(ENV) private readonly env: Env,
     private readonly db: DbService,
     private readonly audit: AuditService,
-    private readonly queues: QueueService,
+    private readonly notify: NotifyService,
   ) {}
 
   async onboard(input: CreateTenantInput, platformUserId: string): Promise<OnboardResult> {
@@ -72,8 +71,7 @@ export class OnboardingService {
       return tenant.id;
     });
     const inviteLink = `${this.env.WEB_APP_URL}/accept-invite?token=${token}`;
-    await this.queues.add(QUEUE.NOTIFY, 'email', {
-      tenantId,
+    await this.notify.email({
       to: input.admin.email,
       subject: `You're invited to manage ${input.displayName} attendance`,
       text: `Hello ${input.admin.fullName},\n\nSet up your Admin account here (valid for ${INVITE_TTL_DAYS} days):\n${inviteLink}\n`,

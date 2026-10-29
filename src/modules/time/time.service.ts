@@ -12,8 +12,7 @@ import { AuditService } from '../../core/audit/audit.service.js';
 import { requireTenantId, requireTenantUser } from '../../core/context/request-context.js';
 import { DbService } from '../../core/database/db.service.js';
 import { AppError, notFound } from '../../core/http/app-error.js';
-import { QUEUE, type RecomputeRangeJob } from '../../core/queue/queues.js';
-import { QueueService } from '../../core/queue/queue.service.js';
+import { AttendanceDayService } from '../attendance/attendance-day.service.js';
 import { dateOnly } from '../../common/serialize.js';
 import { addDays, localDateOf, minDate, toDbDate } from '../../engines/time/dates.js';
 
@@ -22,7 +21,7 @@ export class TimeService {
   constructor(
     private readonly db: DbService,
     private readonly audit: AuditService,
-    private readonly queues: QueueService,
+    private readonly days: AttendanceDayService,
   ) {}
 
   // ---- Policies --------------------------------------------------------------
@@ -233,7 +232,7 @@ export class TimeService {
     await this.recompute([row.employeeId], date, date);
   }
 
-  /** Queues recomputation of existing attendance days (never beyond today). */
+  /** Flags existing attendance days (never beyond today); each is recomputed on its next read. */
   private async recompute(employeeIds: string[] | 'ALL', from?: string, to?: string): Promise<void> {
     const tenantId = requireTenantId();
     const tz = (await this.db.platform.tenant.findUniqueOrThrow({ where: { id: tenantId } })).timezone;
@@ -241,7 +240,6 @@ export class TimeService {
     const start = from ?? addDays(today, -31);
     const end = minDate(to ?? today, today);
     if (start > end) return;
-    const job: RecomputeRangeJob = { tenantId, employeeIds, from: start, to: end };
-    await this.queues.add(QUEUE.ATTENDANCE, 'recompute-range', job);
+    await this.days.markStale(employeeIds, start, end);
   }
 }

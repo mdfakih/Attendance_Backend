@@ -12,6 +12,8 @@ export const tenantSettingsSchema = z.object({
   accuracyBufferCapM: z.coerce.number().int().min(0).max(200).optional(),
   selfieRetentionDays: z.coerce.number().int().min(30).max(365).optional(),
   missingOutReminder: z.boolean().optional(),
+  /** Company-wide working hours; a branch default and then an employee assignment override it. */
+  defaultShiftId: z.uuid().nullable().optional(),
 });
 export type TenantSettingsInput = z.infer<typeof tenantSettingsSchema>;
 

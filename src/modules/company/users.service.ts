@@ -8,8 +8,7 @@ import { requireTenantId, requireTenantUser } from '../../core/context/request-c
 import { randomToken, sha256Hex } from '../../core/crypto/crypto.util.js';
 import { DbService } from '../../core/database/db.service.js';
 import { AppError, notFound } from '../../core/http/app-error.js';
-import { QUEUE } from '../../core/queue/queues.js';
-import { QueueService } from '../../core/queue/queue.service.js';
+import { NotifyService } from '../../core/notify/notify.service.js';
 import { iso } from '../../common/serialize.js';
 
 const INVITE_DAYS = 7;
@@ -31,7 +30,7 @@ export class UsersService {
     private readonly audit: AuditService,
     private readonly principals: PrincipalService,
     private readonly refresh: RefreshTokenService,
-    private readonly queues: QueueService,
+    private readonly notify: NotifyService,
   ) {}
 
   async roles() {
@@ -201,8 +200,7 @@ export class UsersService {
 
   private async sendInvite(tenantId: string, email: string, fullName: string, token: string): Promise<void> {
     const tenant = await this.db.platform.tenant.findUniqueOrThrow({ where: { id: tenantId }, select: { displayName: true } });
-    await this.queues.add(QUEUE.NOTIFY, 'email', {
-      tenantId,
+    await this.notify.email({
       to: email,
       subject: `You're invited to ${tenant.displayName}`,
       text: `Hello ${fullName},\n\nYou have been invited to ${tenant.displayName}'s attendance dashboard.\nAccept within ${INVITE_DAYS} days:\n${this.env.WEB_APP_URL}/accept-invite?token=${token}\n`,

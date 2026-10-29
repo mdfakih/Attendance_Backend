@@ -12,8 +12,8 @@ import { employeeScopeWhere, isInScope } from '../../core/auth/scope.js';
 import { currentContext, requireContext, requireEmployee, requireTenantId, requireTenantUser } from '../../core/context/request-context.js';
 import { DbService, type TenantTx } from '../../core/database/db.service.js';
 import { AppError, notFound } from '../../core/http/app-error.js';
-import { QUEUE, type RecomputeRangeJob } from '../../core/queue/queues.js';
-import { QueueService } from '../../core/queue/queue.service.js';
+import { NotifyService } from '../../core/notify/notify.service.js';
+import { AttendanceDayService } from '../attendance/attendance-day.service.js';
 import { dateOnly, iso, num } from '../../common/serialize.js';
 import type { Prisma } from '../../generated/prisma/client.js';
 import { isValidSpan, leaveFractions, totalLeaveDays } from '../../engines/leave/leave-days.js';
@@ -27,7 +27,8 @@ export class LeaveService {
     private readonly db: DbService,
     private readonly audit: AuditService,
     private readonly loader: DayInputsLoader,
-    private readonly queues: QueueService,
+    private readonly days: AttendanceDayService,
+    private readonly notify: NotifyService,
   ) {}
 
   // ---- Types -------------------------------------------------------------------
@@ -211,7 +212,7 @@ export class LeaveService {
       await this.audit.record({ action: `leave.request.${decision.toLowerCase()}`, entityType: 'leave_request', entityId: requestId, reason: note }, tx);
     });
     if (decision === 'APPROVED') await this.recompute(request.employeeId, dateOnly(request.fromDate) as string, dateOnly(request.toDate) as string);
-    await this.queues.add(QUEUE.NOTIFY, 'push', {
+    await this.notify.employee({
       tenantId,
       employeeId: request.employeeId,
       title: decision === 'APPROVED' ? 'Leave approved' : 'Leave not approved',
@@ -347,9 +348,9 @@ export class LeaveService {
     });
   }
 
+  /** One employee's leave span is small enough to recompute inline (future days included). */
   private async recompute(employeeId: string, from: string, to: string): Promise<void> {
-    const job: RecomputeRangeJob = { tenantId: requireTenantId(), employeeIds: [employeeId], from, to };
-    await this.queues.add(QUEUE.ATTENDANCE, 'recompute-range', job);
+    await this.days.recomputeRange(employeeId, from, to);
   }
 
   private async decorate(rows: Array<Prisma.LeaveRequestGetPayload<object>>) {

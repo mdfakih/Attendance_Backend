@@ -7,6 +7,7 @@ import { DbService } from '../../core/database/db.service.js';
 import { AppError } from '../../core/http/app-error.js';
 import { dateOnly, iso } from '../../common/serialize.js';
 import { AttendanceQueryService } from '../attendance/attendance-query.service.js';
+import { HousekeepingService } from '../housekeeping/housekeeping.service.js';
 
 @Injectable()
 export class EmployeeSelfService {
@@ -15,11 +16,13 @@ export class EmployeeSelfService {
     private readonly audit: AuditService,
     private readonly principals: PrincipalService,
     private readonly attendance: AttendanceQueryService,
+    private readonly housekeeping: HousekeepingService,
   ) {}
 
   async me() {
     const { employeeId, bindingId } = requireEmployee();
     const tenantId = requireTenantId();
+    this.housekeeping.ensureToday();
     const [employee, tenant, binding, notice] = await Promise.all([
       this.db.tenant.employee.findUniqueOrThrow({
         where: { id: employeeId },

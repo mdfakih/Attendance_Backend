@@ -134,6 +134,22 @@ enum OtState {
   REJECTED
 }
 
+/// Where a day stands on counting time worked outside working hours.
+enum RegState {
+  NOT_APPLICABLE
+  AVAILABLE
+  REQUESTED
+  APPROVED
+  REJECTED
+}
+
+enum RegRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
 enum MarkAction {
   SET
   REVOKE

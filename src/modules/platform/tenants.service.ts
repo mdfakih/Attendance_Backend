@@ -6,8 +6,8 @@ import { ENV, type Env } from '../../core/config/env.js';
 import { randomToken, sha256Hex } from '../../core/crypto/crypto.util.js';
 import { DbService } from '../../core/database/db.service.js';
 import { AppError, notFound } from '../../core/http/app-error.js';
-import { QUEUE } from '../../core/queue/queues.js';
-import { QueueService } from '../../core/queue/queue.service.js';
+import { NotifyService } from '../../core/notify/notify.service.js';
+import { HousekeepingService } from '../housekeeping/housekeeping.service.js';
 import { dateOnly, iso, money } from '../../common/serialize.js';
 import type { Prisma } from '../../generated/prisma/client.js';
 import { assertTierAvailable } from './onboarding.service.js';
@@ -26,10 +26,13 @@ export class TenantsService {
     private readonly db: DbService,
     private readonly audit: AuditService,
     private readonly principals: PrincipalService,
-    private readonly queues: QueueService,
+    private readonly notify: NotifyService,
+    private readonly housekeeping: HousekeepingService,
   ) {}
 
   async list(query: TenantListQuery) {
+    // Tenants nobody opens never run their own housekeeping; keep their billing status current here.
+    await this.housekeeping.billingChecksAll();
     const where: Prisma.TenantWhereInput = {
       ...(query.status ? { status: query.status } : {}),
       ...(query.q
@@ -218,8 +221,7 @@ export class TenantsService {
       data: { tokenHash: sha256Hex(token), expiresAt: new Date(Date.now() + 7 * 86_400_000) },
     });
     const inviteLink = `${this.env.WEB_APP_URL}/accept-invite?token=${token}`;
-    await this.queues.add(QUEUE.NOTIFY, 'email', {
-      tenantId,
+    await this.notify.email({
       to: email,
       subject: 'Your Admin invitation',
       text: `Set up your account here (valid for 7 days):\n${inviteLink}\n`,

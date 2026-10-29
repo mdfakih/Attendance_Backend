@@ -44,6 +44,10 @@ export const ERROR_CODES = {
   PUNCH_TOO_SOON: { status: 429, message: 'You punched a moment ago. Please wait.' },
   NO_SITES: { status: 422, message: 'No work location is assigned to you. Contact your employer.' },
   INTENT_EXPIRED: { status: 410, message: 'The punch took too long. Please start again.' },
+  PUNCH_LIMIT: { status: 429, message: 'You have reached today’s punch limit. Contact your employer.' },
+
+  REGULARIZATION_UNAVAILABLE: { status: 409, message: 'There is no time outside working hours to ask about for this day.' },
+  REGULARIZATION_EXISTS: { status: 409, message: 'You have already asked about this day.' },
 
   PERIOD_LOCKED: { status: 409, message: 'This pay month is locked.' },
   LEAVE_OVERLAP: { status: 409, message: 'You already have leave on these dates.' },

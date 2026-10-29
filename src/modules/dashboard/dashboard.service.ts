@@ -8,6 +8,9 @@ import { StorageService } from '../../core/storage/storage.service.js';
 import { iso } from '../../common/serialize.js';
 import type { Prisma } from '../../generated/prisma/client.js';
 import { localDateOf, toDbDate } from '../../engines/time/dates.js';
+import { AttendanceSettleService } from '../attendance/attendance-settle.service.js';
+import { RegularizationService } from '../attendance/regularization.service.js';
+import { HousekeepingService } from '../housekeeping/housekeeping.service.js';
 
 @Injectable()
 export class DashboardService {
@@ -15,13 +18,19 @@ export class DashboardService {
     private readonly db: DbService,
     private readonly cache: CacheService,
     private readonly storage: StorageService,
+    private readonly settle: AttendanceSettleService,
+    private readonly regularizations: RegularizationService,
+    private readonly housekeeping: HousekeepingService,
   ) {}
 
   async summary(query: DashboardQuery) {
     const tenantId = requireTenantId();
+    this.housekeeping.ensureToday();
     const date = query.date ?? (await this.today(tenantId));
     const employeeWhere = this.employeeWhere(query, date);
-    const [employees, days, pendingDevices, pendingLeave, pendingOt] = await Promise.all([
+    // Counts come from stored rows: absent employees and closed days must be written first.
+    await this.settle.settle(date, date, employeeWhere);
+    const [employees, days, pendingDevices, pendingLeave, pendingRegularizations] = await Promise.all([
       this.db.tenant.employee.count({ where: employeeWhere }),
       this.db.tenant.attendanceDay.groupBy({
         by: ['finalStatus'],
@@ -30,7 +39,7 @@ export class DashboardService {
       }),
       this.db.tenant.deviceBinding.count({ where: { status: 'PENDING', employee: employeeScopeWhere() } }),
       this.db.tenant.leaveRequest.count({ where: { status: 'PENDING', employee: employeeScopeWhere() } }),
-      this.db.tenant.attendanceDay.count({ where: { otState: 'PENDING', employee: employeeScopeWhere() } }),
+      this.regularizations.pendingCount(),
     ]);
     const [late, missingOut, withPunches] = await Promise.all([
       this.db.tenant.attendanceDay.count({ where: { attendanceDate: toDbDate(date), isLate: true, employee: employeeWhere } }),
@@ -50,7 +59,7 @@ export class DashboardService {
       late,
       missingOut,
       yetToPunch: Math.max(employees - withPunches - count('LEAVE') - offDay, 0),
-      pending: { devices: pendingDevices, leave: pendingLeave, overtime: pendingOt },
+      pending: { devices: pendingDevices, leave: pendingLeave, regularizations: pendingRegularizations },
       asOf: new Date().toISOString(),
     };
   }

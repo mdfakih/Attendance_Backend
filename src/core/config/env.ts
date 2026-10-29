@@ -48,6 +48,8 @@ export const envSchema = z.object({
     .transform((v) => v.split(',').map((s) => s.trim()).filter(Boolean)),
 
   FCM_SERVICE_ACCOUNT_PATH: z.string().optional().transform((v) => (v ? v : undefined)),
+  /** The service-account JSON itself, for hosts without a file system (e.g. Vercel). Wins over the path. */
+  FCM_SERVICE_ACCOUNT_JSON: z.string().optional().transform((v) => (v ? v : undefined)),
 
   SEED_SUPERADMIN_EMAIL: z.email().optional(),
   SEED_SUPERADMIN_PASSWORD: z.string().optional(),

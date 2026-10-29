@@ -57,7 +57,7 @@ export function runWithContext<T>(ctx: RequestContext, fn: () => T): T {
   return storage.run({ value: ctx }, fn);
 }
 
-/** Runs background work as the system actor inside a tenant (worker jobs, schedulers). */
+/** Runs work as the system actor inside a tenant. */
 export function runAsTenant<T>(tenantId: string, fn: () => Promise<T>, extra: Partial<RequestContext> = {}): Promise<T> {
   return runWithContext({ requestId: `job-${Date.now().toString(36)}`, actor: SYSTEM_ACTOR, tenantId, ...extra }, fn);
 }

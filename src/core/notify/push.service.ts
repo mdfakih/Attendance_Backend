@@ -20,9 +20,8 @@ export class PushService {
   private readonly app: App | null;
 
   constructor(@Inject(ENV) env: Env) {
-    this.app = env.FCM_SERVICE_ACCOUNT_PATH
-      ? initializeApp({ credential: cert(JSON.parse(readFileSync(env.FCM_SERVICE_ACCOUNT_PATH, 'utf8'))) }, 'push')
-      : null;
+    const json = env.FCM_SERVICE_ACCOUNT_JSON ?? (env.FCM_SERVICE_ACCOUNT_PATH ? readFileSync(env.FCM_SERVICE_ACCOUNT_PATH, 'utf8') : null);
+    this.app = json ? initializeApp({ credential: cert(JSON.parse(json)) }, 'push') : null;
   }
 
   async send(message: PushMessage): Promise<PushOutcome> {

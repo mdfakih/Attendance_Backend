@@ -4,8 +4,7 @@ import { AuditService } from '../../core/audit/audit.service.js';
 import { requireTenantId } from '../../core/context/request-context.js';
 import { DbService } from '../../core/database/db.service.js';
 import { AppError, notFound } from '../../core/http/app-error.js';
-import { QUEUE, type RecomputeRangeJob } from '../../core/queue/queues.js';
-import { QueueService } from '../../core/queue/queue.service.js';
+import { AttendanceDayService } from '../attendance/attendance-day.service.js';
 import { addDays, localDateOf } from '../../engines/time/dates.js';
 
 @Injectable()
@@ -13,7 +12,7 @@ export class OrgService {
   constructor(
     private readonly db: DbService,
     private readonly audit: AuditService,
-    private readonly queues: QueueService,
+    private readonly days: AttendanceDayService,
   ) {}
 
   branches() {
@@ -112,7 +111,6 @@ export class OrgService {
     if (employees.length === 0) return;
     const tz = (await this.db.platform.tenant.findUniqueOrThrow({ where: { id: tenantId } })).timezone;
     const today = localDateOf(new Date(), tz);
-    const job: RecomputeRangeJob = { tenantId, employeeIds: employees.map((e) => e.id), from: addDays(today, -31), to: today };
-    await this.queues.add(QUEUE.ATTENDANCE, 'recompute-range', job);
+    await this.days.markStale(employees.map((e) => e.id), addDays(today, -31), today);
   }
 }

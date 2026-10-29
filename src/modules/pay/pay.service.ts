@@ -7,14 +7,19 @@ import { currentContext, requireTenantId, requireTenantUser } from '../../core/c
 import { sha256Hex } from '../../core/crypto/crypto.util.js';
 import { DbService } from '../../core/database/db.service.js';
 import { AppError, notFound } from '../../core/http/app-error.js';
-import { QUEUE, type RecomputePayJob } from '../../core/queue/queues.js';
-import { QueueService } from '../../core/queue/queue.service.js';
+import { forEachLimit } from '../../common/concurrency.js';
+import { retryOnUniqueViolation } from '../../common/unique-retry.js';
 import { dateOnly, iso, money, num } from '../../common/serialize.js';
 import type { EmployeePaySummary, Prisma } from '../../generated/prisma/client.js';
 import { classifyDay } from '../../engines/attendance/calendar.js';
 import { computeEarnedPay, PAY_ENGINE_VERSION, type PayDay, type PayResult, type SalarySegmentInput } from '../../engines/pay/earned-pay.js';
 import { localDateOf, minDate, monthRange, toDbDate } from '../../engines/time/dates.js';
+import { AttendanceSettleService } from '../attendance/attendance-settle.service.js';
 import { DayInputsLoader } from '../attendance/day-inputs.loader.js';
+
+const SETTLE_CONCURRENCY = 4;
+/** A single employee's open month is refreshed at most this often when nothing flagged it. */
+const SUMMARY_FRESH_MS = 15 * 60_000;
 
 const SUMMARY_FIELDS = (r: PayResult) => ({
   salaryBasis: r.salaryBasis,
@@ -51,19 +56,16 @@ export class PayService {
     private readonly db: DbService,
     private readonly audit: AuditService,
     private readonly loader: DayInputsLoader,
-    private readonly queues: QueueService,
+    private readonly settle: AttendanceSettleService,
   ) {}
 
-  /** Recomputes one employee's month. Runs in the worker (tenant context set by the caller). */
-  async recomputeEmployeeMonth(employeeId: string, month: string): Promise<EmployeePaySummary | null> {
+  /** Recomputes one employee's month from settled attendance days. `daysSettled` skips the per-employee settle. */
+  async recomputeEmployeeMonth(employeeId: string, month: string, daysSettled = false): Promise<EmployeePaySummary | null> {
     const tenantId = requireTenantId();
     const { start, end } = monthRange(month);
-    const period = await this.db.tenant.payPeriod.upsert({
-      where: { tenantId_month: { tenantId, month: toDbDate(start) } },
-      update: {},
-      create: { tenantId, month: toDbDate(start) },
-    });
+    const period = await this.ensurePeriod(month);
     if (period.status === 'LOCKED') return null;
+    if (!daysSettled) await this.settle.settleEmployee(employeeId, start, end);
     const [tenant, settings, employee, ctx, days, salary, adjustments, overtime] = await Promise.all([
       this.db.platform.tenant.findUniqueOrThrow({ where: { id: tenantId }, select: { timezone: true } }),
       this.db.tenant.tenantSettings.findUniqueOrThrow({ where: { tenantId } }),
@@ -117,23 +119,57 @@ export class PayService {
     });
     const inputsHash = sha256Hex(JSON.stringify({ result, v: PAY_ENGINE_VERSION }));
     const existing = await this.db.tenant.employeePaySummary.findUnique({ where: { employeeId_periodStart: { employeeId, periodStart: toDbDate(start) } } });
-    if (existing?.inputsHash === inputsHash) return existing;
-    const data = { ...SUMMARY_FIELDS(result), divisorMode: settings.payableDaysBasis, inputsHash, engineVersion: PAY_ENGINE_VERSION, computedAt: new Date() };
-    return this.db.tenant.employeePaySummary.upsert({
-      where: { employeeId_periodStart: { employeeId, periodStart: toDbDate(start) } },
-      update: data,
-      create: { ...data, tenantId, employeeId, payPeriodId: period.id, periodStart: toDbDate(start), periodEnd: toDbDate(end) },
-    });
+    if (existing?.inputsHash === inputsHash) {
+      return existing.isStale ? this.db.tenant.employeePaySummary.update({ where: { id: existing.id }, data: { isStale: false } }) : existing;
+    }
+    const data = { ...SUMMARY_FIELDS(result), divisorMode: settings.payableDaysBasis, isStale: false, inputsHash, engineVersion: PAY_ENGINE_VERSION, computedAt: new Date() };
+    return retryOnUniqueViolation(() =>
+      this.db.tenant.employeePaySummary.upsert({
+        where: { employeeId_periodStart: { employeeId, periodStart: toDbDate(start) } },
+        update: data,
+        create: { ...data, tenantId, employeeId, payPeriodId: period.id, periodStart: toDbDate(start), periodEnd: toDbDate(end) },
+      }),
+    );
   }
 
   async recomputeTenantMonth(month: string): Promise<number> {
     const { start, end } = monthRange(month);
-    const employees = await this.db.tenant.employee.findMany({
-      where: { dateOfJoining: { lte: toDbDate(end) }, OR: [{ status: { in: ['ACTIVE', 'INVITED'] } }, { exitDate: { gte: toDbDate(start) } }] },
-      select: { id: true },
+    const employees = await this.monthEmployees(month);
+    await this.settle.settle(start, end, employees);
+    await forEachLimit(employees, SETTLE_CONCURRENCY, async (id) => {
+      await this.recomputeEmployeeMonth(id, month, true);
     });
-    for (const e of employees) await this.recomputeEmployeeMonth(e.id, month);
     return employees.length;
+  }
+
+  /**
+   * Before a month's summaries are read, recompute those that are missing,
+   * flagged stale by an attendance/salary change, or (in the running month) computed on an earlier day.
+   */
+  async settleMonth(month: string, where: Prisma.EmployeeWhereInput = {}): Promise<void> {
+    const tenantId = requireTenantId();
+    const { start, end } = monthRange(month);
+    const period = await this.db.tenant.payPeriod.findUnique({ where: { tenantId_month: { tenantId, month: toDbDate(start) } } });
+    if (period?.status === 'LOCKED') return;
+    const ids = await this.monthEmployees(month, where);
+    if (ids.length === 0) return;
+    await this.settle.settle(start, end, ids);
+    const [summaries, tenant] = await Promise.all([
+      this.db.tenant.employeePaySummary.findMany({
+        where: { periodStart: toDbDate(start), employeeId: { in: ids } },
+        select: { employeeId: true, isStale: true, computedAt: true },
+      }),
+      this.db.platform.tenant.findUniqueOrThrow({ where: { id: tenantId }, select: { timezone: true } }),
+    ]);
+    const today = localDateOf(new Date(), tenant.timezone);
+    const byEmployee = new Map(summaries.map((s) => [s.employeeId, s]));
+    const due = ids.filter((id) => {
+      const s = byEmployee.get(id);
+      return !s || s.isStale || (today <= end && localDateOf(s.computedAt, tenant.timezone) !== today);
+    });
+    await forEachLimit(due, SETTLE_CONCURRENCY, async (id) => {
+      await this.recomputeEmployeeMonth(id, month, true);
+    });
   }
 
   async register(query: PayRegisterQuery) {
@@ -144,6 +180,7 @@ export class PayService {
       ...(query.departmentId ? { departmentId: query.departmentId } : {}),
       ...(query.q ? { fullName: { contains: query.q, mode: 'insensitive' } } : {}),
     };
+    await this.settleMonth(query.month, where);
     const period = await this.db.tenant.payPeriod.findUnique({ where: { tenantId_month: { tenantId: requireTenantId(), month: toDbDate(start) } } });
     const summaries = await this.db.tenant.employeePaySummary.findMany({ where: { periodStart: toDbDate(start) } });
     const byEmployee = new Map(summaries.map((s) => [s.employeeId, s]));
@@ -219,7 +256,7 @@ export class PayService {
       },
     });
     await this.audit.record({ action: 'pay.adjustment.create', entityType: 'employee', entityId: input.employeeId, after: row, reason: input.reason });
-    await this.queueRecompute(input.employeeId, input.month);
+    await this.recomputeAfterChange(input.employeeId, input.month);
     return { id: row.id };
   }
 
@@ -229,7 +266,7 @@ export class PayService {
     if (row.payPeriod.status === 'LOCKED') throw new AppError('PERIOD_LOCKED');
     await this.db.tenant.payAdjustment.update({ where: { id }, data: { voidedAt: new Date(), voidedById: requireTenantUser().membershipId, voidReason: reason } });
     await this.audit.record({ action: 'pay.adjustment.void', entityType: 'employee', entityId: row.employeeId, before: row, reason });
-    await this.queueRecompute(row.employeeId, row.payPeriod.month.toISOString().slice(0, 7));
+    await this.recomputeAfterChange(row.employeeId, row.payPeriod.month.toISOString().slice(0, 7));
   }
 
   async lockCheck(month: string) {
@@ -237,10 +274,11 @@ export class PayService {
     const tenant = await this.db.platform.tenant.findUniqueOrThrow({ where: { id: requireTenantId() }, select: { timezone: true } });
     const today = localDateOf(new Date(), tenant.timezone);
     const range = { gte: toDbDate(start), lte: toDbDate(end) };
-    const [unfinalized, pendingLeave, pendingOt, noSalary, summaries] = await Promise.all([
+    await this.settle.settle(start, end);
+    const [unfinalized, pendingLeave, pendingRegularizations, noSalary, summaries] = await Promise.all([
       this.db.tenant.attendanceDay.count({ where: { attendanceDate: range, isFinalized: false } }),
       this.db.tenant.leaveRequest.count({ where: { status: 'PENDING', fromDate: { lte: toDbDate(end) }, toDate: { gte: toDbDate(start) } } }),
-      this.db.tenant.attendanceDay.count({ where: { attendanceDate: range, otState: 'PENDING' } }),
+      this.db.tenant.regularizationRequest.count({ where: { attendanceDate: range, status: 'PENDING' } }),
       this.db.tenant.employee.count({ where: { status: { in: ['ACTIVE', 'INVITED'] }, salaryAssignments: { none: {} } } }),
       this.db.tenant.employeePaySummary.findMany({ where: { periodStart: toDbDate(start) }, select: { flags: true } }),
     ]);
@@ -248,7 +286,9 @@ export class PayService {
       today <= end ? { code: 'MONTH_NOT_ENDED', message: 'The month has not ended yet.' } : null,
       unfinalized > 0 ? { code: 'UNFINALIZED_DAYS', message: `${unfinalized} attendance days are still open.` } : null,
       pendingLeave > 0 ? { code: 'PENDING_LEAVE', message: `${pendingLeave} leave requests are pending.` } : null,
-      pendingOt > 0 ? { code: 'PENDING_OT', message: `${pendingOt} overtime entries await a decision.` } : null,
+      pendingRegularizations > 0
+        ? { code: 'PENDING_REGULARIZATION', message: `${pendingRegularizations} requests to count time outside working hours await a decision.` }
+        : null,
       noSalary > 0 ? { code: 'NO_SALARY', message: `${noSalary} employees have no salary set.` } : null,
       summaries.some((s) => s.flags.includes('NEGATIVE_NET')) ? { code: 'NEGATIVE_NET', message: 'Some employees have a negative net.' } : null,
     ].filter((w): w is { code: string; message: string } => w !== null);
@@ -286,11 +326,11 @@ export class PayService {
     if (!period || period.status !== 'LOCKED') throw new AppError('CONFLICT', 'This month is not locked.');
     await this.db.tenant.$transaction(async (tx) => {
       await tx.payPeriod.update({ where: { id: period.id }, data: { status: 'OPEN', unlockCount: { increment: 1 }, lastUnlockReason: reason } });
-      await tx.employeePaySummary.updateMany({ where: { payPeriodId: period.id }, data: { status: 'OPEN' } });
+      // Reopened summaries are recomputed on their next read.
+      await tx.employeePaySummary.updateMany({ where: { payPeriodId: period.id }, data: { status: 'OPEN', isStale: true } });
       await tx.attendanceDay.updateMany({ where: { attendanceDate: { gte: toDbDate(start), lte: toDbDate(end) } }, data: { periodLocked: false } });
       await this.audit.record({ action: 'pay.period.unlock', entityType: 'pay_period', entityId: month, reason }, tx);
     });
-    await this.queues.add(QUEUE.PAY, 'recompute-month', { tenantId: requireTenantId(), month });
     return { month, status: 'OPEN' };
   }
 
@@ -301,24 +341,43 @@ export class PayService {
 
   private async ensureSummary(employeeId: string, month: string): Promise<EmployeePaySummary | null> {
     const existing = await this.db.tenant.employeePaySummary.findUnique({ where: { employeeId_periodStart: { employeeId, periodStart: toDbDate(`${month}-01`) } } });
-    if (existing && (existing.status === 'LOCKED' || Date.now() - existing.computedAt.getTime() < 60_000)) return existing;
+    if (existing && (existing.status === 'LOCKED' || (!existing.isStale && Date.now() - existing.computedAt.getTime() < SUMMARY_FRESH_MS))) {
+      return existing;
+    }
     return (await this.recomputeEmployeeMonth(employeeId, month)) ?? existing;
   }
 
-  private async openPeriod(month: string) {
-    const start = toDbDate(`${month}-01`);
-    const period = await this.db.tenant.payPeriod.upsert({
-      where: { tenantId_month: { tenantId: requireTenantId(), month: start } },
-      update: {},
-      create: { tenantId: requireTenantId(), month: start },
+  /** Employees with any employed day in the month (optionally narrowed). */
+  private async monthEmployees(month: string, where: Prisma.EmployeeWhereInput = {}): Promise<string[]> {
+    const { start, end } = monthRange(month);
+    const rows = await this.db.tenant.employee.findMany({
+      where: { ...where, dateOfJoining: { lte: toDbDate(end) }, OR: [{ status: { in: ['ACTIVE', 'INVITED'] } }, { exitDate: { gte: toDbDate(start) } }] },
+      select: { id: true },
     });
+    return rows.map((r) => r.id);
+  }
+
+  private async openPeriod(month: string) {
+    const period = await this.ensurePeriod(month);
     if (period.status === 'LOCKED') throw new AppError('PERIOD_LOCKED');
     return period;
   }
 
-  private async queueRecompute(employeeId: string, month: string): Promise<void> {
-    const job: RecomputePayJob = { tenantId: requireTenantId(), employeeId, month };
-    await this.queues.add(QUEUE.PAY, 'recompute-employee', job, { jobId: `pay-${employeeId}-${month}-${Date.now()}` });
+  /** The month's pay period, created on first use (safe when parallel recomputes race to create it). */
+  private ensurePeriod(month: string) {
+    const tenantId = requireTenantId();
+    const start = toDbDate(`${month}-01`);
+    return retryOnUniqueViolation(() =>
+      this.db.tenant.payPeriod.upsert({
+        where: { tenantId_month: { tenantId, month: start } },
+        update: {},
+        create: { tenantId, month: start },
+      }),
+    );
+  }
+
+  private async recomputeAfterChange(employeeId: string, month: string): Promise<void> {
+    await this.recomputeEmployeeMonth(employeeId, month);
   }
 
   private summaryDto(e: { id: string; fullName: string; employeeCode: string | null; branch?: { name: string } | null; department?: { name: string } | null }, s: EmployeePaySummary) {

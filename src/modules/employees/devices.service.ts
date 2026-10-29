@@ -7,8 +7,7 @@ import { employeeScopeWhere, isInScope } from '../../core/auth/scope.js';
 import { requireTenantId, requireTenantUser } from '../../core/context/request-context.js';
 import { DbService } from '../../core/database/db.service.js';
 import { AppError, notFound } from '../../core/http/app-error.js';
-import { QUEUE } from '../../core/queue/queues.js';
-import { QueueService } from '../../core/queue/queue.service.js';
+import { NotifyService } from '../../core/notify/notify.service.js';
 import { StorageService } from '../../core/storage/storage.service.js';
 import { iso } from '../../common/serialize.js';
 import { ActivationCodesService, type IssuedCode } from './activation-codes.service.js';
@@ -24,7 +23,7 @@ export class DevicesService {
     private readonly refresh: RefreshTokenService,
     private readonly principals: PrincipalService,
     private readonly storage: StorageService,
-    private readonly queues: QueueService,
+    private readonly notify: NotifyService,
   ) {}
 
   async bindings(status?: 'PENDING' | 'ACTIVE') {
@@ -72,7 +71,7 @@ export class DevicesService {
       await this.audit.record({ action: 'device.binding.approved', entityType: 'device_binding', entityId: bindingId }, tx);
     });
     await Promise.all([this.principals.invalidateBinding(bindingId), this.principals.invalidateEmployee(binding.employeeId)]);
-    await this.queues.add(QUEUE.NOTIFY, 'push', {
+    await this.notify.employee({
       tenantId: requireTenantId(),
       employeeId: binding.employeeId,
       title: 'Phone approved',
@@ -163,8 +162,9 @@ export class DevicesService {
     const employee = await this.db.tenant.employee.findUnique({ where: { id: employeeId } });
     if (!employee || !isInScope(employee)) throw notFound('Employee');
     if (!employee.email) throw new AppError('VALIDATION_FAILED', 'This employee has no email address.');
-    await this.queues.add(QUEUE.NOTIFY, 'activation-email', { tenantId: requireTenantId(), employeeId });
-    await this.audit.record({ action: 'activation_code.emailed', entityType: 'employee', entityId: employeeId });
+    if (!(await this.codes.emailActivationCode(employeeId))) {
+      throw new AppError('CONFLICT', 'The code could not be emailed. Check that the employee has a live code, then try again.');
+    }
   }
 
   /** Codes for many employees: reveals live codes and issues new ones where missing/expired. */

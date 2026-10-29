@@ -5,8 +5,13 @@ import { AuditService } from '../../core/audit/audit.service.js';
 import { PrincipalService } from '../../core/auth/principal.service.js';
 import { requireContext, requireTenantId, requireTenantUser } from '../../core/context/request-context.js';
 import { DbService } from '../../core/database/db.service.js';
-import { notFound } from '../../core/http/app-error.js';
+import { AppError, notFound } from '../../core/http/app-error.js';
 import { dateOnly, money } from '../../common/serialize.js';
+import { addDays, localDateOf } from '../../engines/time/dates.js';
+import { AttendanceDayService } from '../attendance/attendance-day.service.js';
+
+/** How far back a change of company working hours is applied to existing days. */
+const RECOMPUTE_BACK_DAYS = 31;
 
 @Injectable()
 export class CompanyService {
@@ -14,6 +19,7 @@ export class CompanyService {
     private readonly db: DbService,
     private readonly audit: AuditService,
     private readonly principals: PrincipalService,
+    private readonly days: AttendanceDayService,
   ) {}
 
   async me() {
@@ -56,6 +62,10 @@ export class CompanyService {
     const tenantId = requireTenantId();
     const before = await this.db.tenant.tenantSettings.findUniqueOrThrow({ where: { tenantId } });
     const { timezone, ...rest } = input;
+    if (rest.defaultShiftId) {
+      const shift = await this.db.tenant.shift.findUnique({ where: { id: rest.defaultShiftId } });
+      if (!shift) throw new AppError('VALIDATION_FAILED', 'Unknown shift.');
+    }
     const after = await this.db.tenant.tenantSettings.update({
       where: { tenantId },
       data: {
@@ -65,10 +75,16 @@ export class CompanyService {
         accuracyBufferCapM: rest.accuracyBufferCapM,
         selfieRetentionDays: rest.selfieRetentionDays,
         missingOutReminder: rest.missingOutReminder,
+        defaultShiftId: rest.defaultShiftId,
       },
     });
     if (timezone) {
       await this.db.platform.tenant.update({ where: { id: tenantId }, data: { timezone } });
+    }
+    if (rest.defaultShiftId !== undefined && rest.defaultShiftId !== before.defaultShiftId) {
+      const tenant = await this.db.platform.tenant.findUniqueOrThrow({ where: { id: tenantId }, select: { timezone: true } });
+      const today = localDateOf(new Date(), tenant.timezone);
+      await this.days.markStale('ALL', addDays(today, -RECOMPUTE_BACK_DAYS), today);
     }
     await this.audit.record({ action: 'tenant.settings.update', entityType: 'tenant_settings', entityId: tenantId, before, after });
     return this.settingsDto(after);
@@ -81,6 +97,8 @@ export class CompanyService {
       where: { tenantId },
       data: { payableDaysBasis: input.payableDaysBasis, defaultOtMultiplier: new Decimal(input.defaultOtMultiplier) },
     });
+    // Every open month's pay depends on these; recompute on next read.
+    await this.db.tenant.employeePaySummary.updateMany({ where: { status: 'OPEN' }, data: { isStale: true } });
     await this.audit.record({ action: 'tenant.pay_settings.update', entityType: 'tenant_settings', entityId: tenantId, before, after });
     return this.settingsDto(after);
   }
@@ -147,6 +165,7 @@ export class CompanyService {
       defaultPolicyId: s.defaultPolicyId,
       defaultCalendarId: s.defaultCalendarId,
       defaultPatternId: s.defaultPatternId,
+      defaultShiftId: s.defaultShiftId,
     };
   }
 }

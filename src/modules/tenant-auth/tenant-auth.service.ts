@@ -1,6 +1,7 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { AcceptInviteInput, LoginInput, TokenPair } from '@attendance/contracts';
 import { AuditService } from '../../core/audit/audit.service.js';
+import { runInBackground } from '../../core/background.js';
 import { PasswordService } from '../../core/auth/password.service.js';
 import { RefreshTokenService } from '../../core/auth/refresh-token.service.js';
 import { TokenService } from '../../core/auth/token.service.js';
@@ -10,8 +11,7 @@ import { decryptString, randomToken, sha256Hex } from '../../core/crypto/crypto.
 import { verifyTotp } from '../../core/crypto/totp.js';
 import { DbService } from '../../core/database/db.service.js';
 import { AppError } from '../../core/http/app-error.js';
-import { QUEUE } from '../../core/queue/queues.js';
-import { QueueService } from '../../core/queue/queue.service.js';
+import { NotifyService } from '../../core/notify/notify.service.js';
 import { CacheService } from '../../core/redis/cache.service.js';
 
 const MAX_FAILURES = 10;
@@ -32,6 +32,8 @@ export type LoginOutcome =
 
 @Injectable()
 export class TenantAuthService {
+  private readonly logger = new Logger(TenantAuthService.name);
+
   constructor(
     @Inject(ENV) private readonly env: Env,
     private readonly db: DbService,
@@ -40,7 +42,7 @@ export class TenantAuthService {
     private readonly refresh: RefreshTokenService,
     private readonly cache: CacheService,
     private readonly audit: AuditService,
-    private readonly queues: QueueService,
+    private readonly notify: NotifyService,
   ) {}
 
   async login(input: LoginInput): Promise<LoginOutcome> {
@@ -187,12 +189,14 @@ export class TenantAuthService {
     await this.db.platform.passwordResetToken.create({
       data: { realm: 'TENANT_USER', subjectId: user.id, tokenHash: sha256Hex(token), expiresAt: new Date(Date.now() + 30 * 60_000) },
     });
-    await this.queues.add(QUEUE.NOTIFY, 'email', {
-      tenantId: null,
-      to: email,
-      subject: 'Reset your password',
-      text: `Reset your password (valid for 30 minutes):\n${this.env.WEB_APP_URL}/reset-password?token=${token}\n\nIf you did not ask for this, ignore this email.`,
-    });
+    // Sent after the response: waiting on SMTP only for real accounts would reveal which emails exist.
+    runInBackground('Password reset email', this.logger, () =>
+      this.notify.email({
+        to: email,
+        subject: 'Reset your password',
+        text: `Reset your password (valid for 30 minutes):\n${this.env.WEB_APP_URL}/reset-password?token=${token}\n\nIf you did not ask for this, ignore this email.`,
+      }),
+    );
   }
 
   async resetPassword(token: string, password: string): Promise<void> {

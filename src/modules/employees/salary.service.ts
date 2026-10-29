@@ -6,8 +6,6 @@ import { isInScope } from '../../core/auth/scope.js';
 import { requireTenantId, requireTenantUser } from '../../core/context/request-context.js';
 import { DbService } from '../../core/database/db.service.js';
 import { AppError, notFound } from '../../core/http/app-error.js';
-import { QUEUE, type RecomputePayJob } from '../../core/queue/queues.js';
-import { QueueService } from '../../core/queue/queue.service.js';
 import { addDays, monthOf, toDbDate } from '../../engines/time/dates.js';
 
 /** Effective-dated salary revisions. A revision closes the previous open row the day before. */
@@ -16,7 +14,6 @@ export class SalaryService {
   constructor(
     private readonly db: DbService,
     private readonly audit: AuditService,
-    private readonly queues: QueueService,
   ) {}
 
   async addRevision(employeeId: string, input: SalaryInput) {
@@ -51,8 +48,11 @@ export class SalaryService {
       await this.audit.record({ action: 'salary.assignment.create', entityType: 'employee', entityId: employeeId, after: row }, tx);
       return row;
     });
-    const job: RecomputePayJob = { tenantId: requireTenantId(), employeeId, month };
-    await this.queues.add(QUEUE.PAY, 'recompute-employee', job, { jobId: `pay:${employeeId}:${month}:${Date.now()}` });
+    // Every open month from the effective date on is recomputed on its next read.
+    await this.db.tenant.employeePaySummary.updateMany({
+      where: { employeeId, periodStart: { gte: toDbDate(`${month}-01`) }, status: 'OPEN' },
+      data: { isStale: true },
+    });
     return { id: created.id };
   }
 }

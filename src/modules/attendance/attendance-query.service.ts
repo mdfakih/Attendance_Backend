@@ -9,6 +9,7 @@ import { StorageService } from '../../core/storage/storage.service.js';
 import { dateOnly, iso, num } from '../../common/serialize.js';
 import type { Prisma } from '../../generated/prisma/client.js';
 import { eachDate, localDateOf, monthRange, toDbDate } from '../../engines/time/dates.js';
+import { AttendanceSettleService } from './attendance-settle.service.js';
 
 const SHORT: Readonly<Record<string, string>> = {
   PRESENT: 'P',
@@ -29,16 +30,16 @@ export class AttendanceQueryService {
     private readonly db: DbService,
     private readonly storage: StorageService,
     private readonly audit: AuditService,
+    private readonly settle: AttendanceSettleService,
   ) {}
 
-  async today(): Promise<string> {
-    const tenant = await this.db.platform.tenant.findUniqueOrThrow({ where: { id: requireTenantId() }, select: { timezone: true } });
-    return localDateOf(new Date(), tenant.timezone);
+  today(): Promise<string> {
+    return this.settle.today();
   }
 
   async daily(query: AttendanceDailyQuery) {
     const date = toDbDate(query.date);
-    const employeeWhere: Prisma.EmployeeWhereInput = {
+    const filterWhere: Prisma.EmployeeWhereInput = {
       ...employeeScopeWhere(),
       status: { in: ['ACTIVE', 'INVITED'] },
       dateOfJoining: { lte: date },
@@ -48,6 +49,11 @@ export class AttendanceQueryService {
       ...(query.q
         ? { OR: [{ fullName: { contains: query.q, mode: 'insensitive' } }, { employeeCode: { contains: query.q, mode: 'insensitive' } }] }
         : {}),
+    };
+    // Status filters below match stored rows, so the filtered employees' rows for the date must exist first.
+    await this.settle.settle(query.date, query.date, filterWhere);
+    const employeeWhere: Prisma.EmployeeWhereInput = {
+      ...filterWhere,
       ...(query.status === 'NOT_STARTED'
         ? { attendanceDays: { none: { attendanceDate: date, punchCount: { gt: 0 } } } }
         : query.status
@@ -79,6 +85,8 @@ export class AttendanceQueryService {
         firstPunchAt: iso(day?.firstPunchAt),
         lastPunchAt: iso(day?.lastPunchAt),
         workedMinutes: day?.workedMinutes ?? 0,
+        outsideMinutes: day?.outsideMinutes ?? 0,
+        regState: day?.regState ?? 'NOT_APPLICABLE',
         isLate: day?.isLate ?? false,
         lateMinutes: day?.lateMinutes ?? 0,
         isMissingOut: day?.isMissingOut ?? false,
@@ -100,16 +108,23 @@ export class AttendanceQueryService {
       ...(query.departmentId ? { departmentId: query.departmentId } : {}),
       ...(query.q ? { fullName: { contains: query.q, mode: 'insensitive' } } : {}),
     };
-    const [employees, total] = await Promise.all([
+    const [page, total] = await Promise.all([
       this.db.tenant.employee.findMany({
         where,
-        include: { attendanceDays: { where: { attendanceDate: { gte: toDbDate(start), lte: toDbDate(end) } } } },
+        select: { id: true },
         orderBy: { fullName: 'asc' },
         skip: (query.page - 1) * query.pageSize,
         take: query.pageSize,
       }),
       this.db.tenant.employee.count({ where }),
     ]);
+    // Only this page's employees are brought up to date.
+    await this.settle.settle(start, end, page.map((e) => e.id));
+    const employees = await this.db.tenant.employee.findMany({
+      where: { id: { in: page.map((e) => e.id) } },
+      include: { attendanceDays: { where: { attendanceDate: { gte: toDbDate(start), lte: toDbDate(end) } } } },
+      orderBy: { fullName: 'asc' },
+    });
     const dates = eachDate(start, end);
     const items = employees.map((e) => {
       const byDate = new Map(e.attendanceDays.map((d) => [dateOnly(d.attendanceDate) as string, d]));
@@ -145,6 +160,7 @@ export class AttendanceQueryService {
   /** Shared by the employer calendar and the employee app. */
   async monthView(employeeId: string, month: string) {
     const { start, end } = monthRange(month);
+    await this.settle.settleEmployee(employeeId, start, end);
     const days = await this.db.tenant.attendanceDay.findMany({
       where: { employeeId, attendanceDate: { gte: toDbDate(start), lte: toDbDate(end) } },
       orderBy: { attendanceDate: 'asc' },
@@ -164,6 +180,8 @@ export class AttendanceQueryService {
       firstPunchAt: iso(d.firstPunchAt),
       lastPunchAt: iso(d.lastPunchAt),
       workedMinutes: d.workedMinutes,
+      outsideMinutes: d.outsideMinutes,
+      regState: d.regState,
       isLate: d.isLate,
       lateMinutes: d.lateMinutes,
       isMissingOut: d.isMissingOut,
@@ -186,6 +204,7 @@ export class AttendanceQueryService {
   async dayDetail(employeeId: string, date: string, withSelfies = true) {
     const employee = await this.db.tenant.employee.findUnique({ where: { id: employeeId }, select: { id: true, fullName: true, branchId: true, departmentId: true } });
     if (!employee || !isInScope(employee)) throw notFound('Employee');
+    await this.settle.settleEmployee(employeeId, date, date);
     const [day, punches, marks] = await Promise.all([
       this.db.tenant.attendanceDay.findUnique({ where: { employeeId_attendanceDate: { employeeId, attendanceDate: toDbDate(date) } } }),
       this.db.tenant.punch.findMany({ where: { employeeId, attendanceDate: toDbDate(date) }, orderBy: { serverTime: 'asc' } }),
@@ -196,7 +215,11 @@ export class AttendanceQueryService {
       select: { id: true, name: true },
     });
     const siteName = new Map(sites.map((s) => [s.id, s.name]));
-    if (withSelfies && punches.some((p) => p.selfieKey)) {
+    // Past retention a selfie is treated as purged even before housekeeping or the bucket lifecycle removes it.
+    const settings = await this.db.tenant.tenantSettings.findUnique({ where: { tenantId: requireTenantId() }, select: { selfieRetentionDays: true } });
+    const retainedSince = Date.now() - (settings?.selfieRetentionDays ?? 90) * 86_400_000;
+    const viewable = (p: { selfiePurgedAt: Date | null; serverTime: Date }) => withSelfies && !p.selfiePurgedAt && p.serverTime.getTime() >= retainedSince;
+    if (punches.some((p) => p.selfieKey && viewable(p))) {
       await this.audit.record({ action: 'selfie.view', entityType: 'employee', entityId: employeeId, after: { date } });
     }
     const punchDtos = await Promise.all(
@@ -214,8 +237,8 @@ export class AttendanceQueryService {
         flags: p.flags,
         voided: !!p.voidedAt,
         reason: p.reason,
-        selfieUrl: withSelfies && p.selfieKey && !p.selfiePurgedAt ? await this.storage.presignGet(p.selfieKey, 300) : null,
-        thumbUrl: withSelfies && (p.thumbKey ?? p.selfieKey) && !p.selfiePurgedAt ? await this.storage.presignGet((p.thumbKey ?? p.selfieKey) as string, 300) : null,
+        selfieUrl: p.selfieKey && viewable(p) ? await this.storage.presignGet(p.selfieKey, 300) : null,
+        thumbUrl: (p.thumbKey ?? p.selfieKey) && viewable(p) ? await this.storage.presignGet((p.thumbKey ?? p.selfieKey) as string, 300) : null,
       })),
     );
     return {
@@ -227,6 +250,11 @@ export class AttendanceQueryService {
         statusSource: day.statusSource,
         dayType: day.dayType,
         workedMinutes: day.workedMinutes,
+        outsideEarlyMinutes: day.outsideEarlyMinutes,
+        outsideLateMinutes: day.outsideLateMinutes,
+        outsideMinutes: day.outsideMinutes,
+        regState: day.regState,
+        regApprovedMinutes: day.regApprovedMinutes,
         isLate: day.isLate,
         lateMinutes: day.lateMinutes,
         earlyLeaveMinutes: day.earlyLeaveMinutes,
