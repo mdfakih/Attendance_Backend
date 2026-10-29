@@ -1,0 +1,57 @@
+# Free test hosting on Render, in Singapore next to Neon. Render dashboard → New → Blueprint → this repo.
+# The free instance sleeps after 15 minutes without traffic and takes about a minute to wake up.
+# Free instances cannot send mail on ports 25/465/587: emails are logged as failed (requests still work)
+# unless SMTP_HOST/SMTP_PORT point at a provider that accepts port 2525.
+services:
+  - type: web
+    name: attendance-api
+    runtime: node
+    plan: free
+    region: singapore
+    # The Nest CLI and TypeScript are dev dependencies; NODE_ENV=production would otherwise skip them.
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: node dist/main.js
+    # /health/live does not touch the database, so health checks never keep Neon's compute awake.
+    healthCheckPath: /health/live
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      - key: NODE_ENV
+        value: production
+      # Neon pooled connection string (migrations run separately with `npm run db:deploy`).
+      - key: DATABASE_URL
+        sync: false
+      # Hosted Redis, e.g. Upstash free tier: rediss://default:<password>@<host>:6379
+      - key: REDIS_URL
+        sync: false
+      # Neon Object Storage (Storage tab → Connect).
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_ACCESS_KEY
+        sync: false
+      - key: S3_SECRET_KEY
+        sync: false
+      - key: S3_REGION
+        value: ap-southeast-1
+      - key: S3_BUCKET
+        value: attendance
+      - key: S3_FORCE_PATH_STYLE
+        value: "true"
+      # The web dashboard's URL (invite links, CORS). Change when the dashboard is deployed.
+      - key: WEB_APP_URL
+        value: http://localhost:3000
+      - key: CORS_ORIGINS
+        value: http://localhost:3000
+      # Random 256-bit values. Keep them: changing them later breaks activation codes, devices and sessions.
+      - key: JWT_SECRET_EMPLOYEE
+        generateValue: true
+      - key: JWT_SECRET_TENANT
+        generateValue: true
+      - key: JWT_SECRET_PLATFORM
+        generateValue: true
+      - key: CODE_PEPPER_V1
+        generateValue: true
+      - key: CODE_ENC_KEY
+        generateValue: true
+      - key: DEVICE_ID_HMAC_KEY
+        generateValue: true
