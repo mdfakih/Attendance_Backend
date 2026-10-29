@@ -16,7 +16,11 @@ model AttendancePolicy {
   otMinMinutes        Int                 @default(30) @map("ot_min_minutes")
   otRoundingMinutes   Int                 @default(15) @map("ot_rounding_minutes")
   otDailyCapMinutes   Int                 @default(240) @map("ot_daily_cap_minutes")
+  /// When false, time outside working hours counts without an employer decision.
   otRequiresApproval  Boolean             @default(true) @map("ot_requires_approval")
+  /// Outside time shorter than this, before the start or after the end, is ignored.
+  outsideMinMinutes   Int                 @default(15) @map("outside_min_minutes")
+  maxPunchesPerDay    Int                 @default(6) @map("max_punches_per_day")
   active              Boolean             @default(true)
   createdAt           DateTime            @default(now()) @map("created_at") @db.Timestamptz
   updatedAt           DateTime            @updatedAt @map("updated_at") @db.Timestamptz

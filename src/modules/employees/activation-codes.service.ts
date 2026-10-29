@@ -12,6 +12,7 @@ import {
   safeEqualHex,
 } from '../../core/crypto/crypto.util.js';
 import { DbService, type PlatformTx, type TenantTx } from '../../core/database/db.service.js';
+import { NotifyService } from '../../core/notify/notify.service.js';
 
 export const MAX_CODE_ATTEMPTS = 5;
 const PEPPER_VERSION = 1;
@@ -39,6 +40,7 @@ export class ActivationCodesService {
     @Inject(ENV) private readonly env: Env,
     private readonly db: DbService,
     private readonly audit: AuditService,
+    private readonly notify: NotifyService,
   ) {}
 
   digest(tenantId: string, employeeId: string, purpose: CodePurpose, code: string): string {
@@ -126,6 +128,34 @@ export class ActivationCodesService {
       where: { id: codeId },
       data: { status: 'USED', usedAt: new Date(), usedByBindingId: bindingId, liveKey: null, codeEnc: null },
     });
+  }
+
+  /**
+   * Emails the live activation code to the employee (needs tenant context). Returns false without an
+   * email address, without a live code, or when the mail server refused it; the audit records only real sends.
+   */
+  async emailActivationCode(employeeId: string): Promise<boolean> {
+    const employee = await this.db.tenant.employee.findUnique({ where: { id: employeeId } });
+    if (!employee?.email) return false;
+    const code = await this.reveal(employee.id, 'ACTIVATION');
+    if (!code) return false;
+    const tenant = await this.db.platform.tenant.findUniqueOrThrow({ where: { id: employee.tenantId }, select: { displayName: true } });
+    const sent = await this.notify.email({
+      to: employee.email,
+      subject: `Your ${tenant.displayName} attendance app code`,
+      text: [
+        `Hello ${employee.fullName},`,
+        '',
+        `Install the attendance app and sign in with your mobile number ${employee.phoneE164} and this one-time code:`,
+        '',
+        `    ${code.formatted}`,
+        '',
+        `The code works once and expires on ${code.expiresAt.toISOString().slice(0, 10)}. Do not share it.`,
+      ].join('\n'),
+    });
+    if (!sent) return false;
+    await this.audit.record({ action: 'activation_code.emailed', entityType: 'employee', entityId: employee.id, tenantId: employee.tenantId });
+    return true;
   }
 
   async revokeAll(tx: Tx, employeeId: string): Promise<void> {

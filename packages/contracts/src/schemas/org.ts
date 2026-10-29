@@ -46,7 +46,11 @@ export const policySchema = z.object({
   otMinMinutes: z.coerce.number().int().min(0).max(600).default(30),
   otRoundingMinutes: z.coerce.number().int().min(1).max(60).default(15),
   otDailyCapMinutes: z.coerce.number().int().min(0).max(960).default(240),
+  /** When false, time outside working hours counts without an employer decision. */
   otRequiresApproval: z.boolean().default(true),
+  /** Outside time shorter than this, before the start or after the end, is ignored. */
+  outsideMinMinutes: z.coerce.number().int().min(0).max(240).default(15),
+  maxPunchesPerDay: z.coerce.number().int().min(2).max(20).default(6),
 });
 export type PolicyInput = z.infer<typeof policySchema>;
 

@@ -3,6 +3,10 @@ import { defineConfig } from "@neon/config/v1";
 export default defineConfig({
   // Declare your Neon services here
   auth: false,
+  // Private bucket for selfies and exports (S3_BUCKET). `neon deploy` creates it on the linked branch.
+  buckets: {
+    attendance: {},
+  },
   // Branch policy: per-branch tuning
   branch: (branch) => {
     if (branch.isDefault) {

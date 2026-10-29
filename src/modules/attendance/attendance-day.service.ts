@@ -3,9 +3,7 @@ import type { ManualMarkStatus } from '@attendance/contracts';
 import { Decimal } from 'decimal.js';
 import { sha256Hex } from '../../core/crypto/crypto.util.js';
 import { DbService, type TenantTx } from '../../core/database/db.service.js';
-import { QUEUE, type RecomputePayJob } from '../../core/queue/queues.js';
-import { QueueService } from '../../core/queue/queue.service.js';
-import type { AttendanceDay } from '../../generated/prisma/client.js';
+import type { AttendanceDay, RegState } from '../../generated/prisma/client.js';
 import { classifyDay } from '../../engines/attendance/calendar.js';
 import { ATTENDANCE_ENGINE_VERSION, computeDay, type DayResult } from '../../engines/attendance/compute-day.js';
 import { shiftInstance } from '../../engines/attendance/shift.js';
@@ -13,11 +11,20 @@ import { type IsoDate, maxDate, minDate, monthOf, toDbDate } from '../../engines
 import { DayInputsLoader, type EmployeeContext } from './day-inputs.loader.js';
 
 const DEFAULT_DUTY_MINUTES = 480;
+/** Long leave spans recompute many days in one transaction. */
+const RECOMPUTE_TX_TIMEOUT_MS = 30_000;
+
+/** Advisory-lock key serialising everything that writes an employee's punches or days. */
+export function employeeDayLock(employeeId: string): string {
+  return `punch:${employeeId}`;
+}
 
 export interface WrittenDay {
   readonly date: IsoDate;
   readonly result: DayResult;
   readonly changed: boolean;
+  /** Regularization state before this write; null when the row is new. */
+  readonly previousRegState: RegState | null;
 }
 
 /** The only writer of attendance_days. Deterministic: same inputs → same row (hash-skipped). */
@@ -26,7 +33,6 @@ export class AttendanceDayService {
   constructor(
     private readonly db: DbService,
     private readonly loader: DayInputsLoader,
-    private readonly queues: QueueService,
   ) {}
 
   async recomputeDay(employeeId: string, date: IsoDate, tx?: TenantTx): Promise<WrittenDay | null> {
@@ -34,13 +40,28 @@ export class AttendanceDayService {
     return day ?? null;
   }
 
+  /**
+   * With a caller transaction, the caller must hold `employeeDayLock`. Without one, the work runs in its
+   * own transaction under that lock, so a concurrent punch is either fully seen by this computation or
+   * applied after it — a read-triggered recompute can never overwrite a newer punch.
+   */
   async recomputeRange(employeeId: string, from: IsoDate, to: IsoDate, tx?: TenantTx): Promise<WrittenDay[]> {
-    const ctx = await this.loader.load(employeeId, from, to, tx);
+    if (tx) return this.recomputeLocked(employeeId, from, to, tx);
+    return this.db.tenant.$transaction(
+      async (locked) => {
+        await this.db.lock(locked, employeeDayLock(employeeId));
+        return this.recomputeLocked(employeeId, from, to, locked);
+      },
+      { timeout: RECOMPUTE_TX_TIMEOUT_MS },
+    );
+  }
+
+  private async recomputeLocked(employeeId: string, from: IsoDate, to: IsoDate, client: TenantTx): Promise<WrittenDay[]> {
+    const ctx = await this.loader.load(employeeId, from, to, client);
     if (!ctx) return [];
     const start = maxDate(from, ctx.joinDate);
     const end = ctx.exitDate ? minDate(to, ctx.exitDate) : to;
     if (start > end) return [];
-    const client = tx ?? this.db.tenant;
     const [existing, lockedMonths] = await Promise.all([
       client.attendanceDay.findMany({ where: { employeeId, attendanceDate: { gte: toDbDate(start), lte: toDbDate(end) } } }),
       client.payPeriod.findMany({ where: { status: 'LOCKED', month: { gte: toDbDate(`${monthOf(start)}-01`), lte: toDbDate(`${monthOf(end)}-01`) } } }),
@@ -54,17 +75,30 @@ export class AttendanceDayService {
       written.push(await this.writeOne(client, ctx, date, byDate.get(date) ?? null, now));
     }
     const months = new Set(written.filter((w) => w.changed).map((w) => monthOf(w.date)));
-    await Promise.all([...months].map((month) => this.queuePay(ctx.tenantId, employeeId, month)));
+    await Promise.all([...months].map((month) => this.markPayStale(employeeId, month, client)));
     return written;
   }
 
-  async queuePay(tenantId: string, employeeId: string, month: string): Promise<void> {
-    const job: RecomputePayJob = { tenantId, employeeId, month };
-    await this.queues.add(QUEUE.PAY, 'recompute-employee', job, {
-      jobId: `pay-${employeeId}-${month}`,
-      delay: 3000,
-      removeOnComplete: true,
-      removeOnFail: true,
+  /** The employee's open pay summary for the month is recomputed on its next read. */
+  async markPayStale(employeeId: string, month: string, client: TenantTx | DbService['tenant'] = this.db.tenant): Promise<void> {
+    await client.employeePaySummary.updateMany({
+      where: { employeeId, periodStart: toDbDate(`${month}-01`), status: 'OPEN' },
+      data: { isStale: true },
+    });
+  }
+
+  /**
+   * Bulk changes (shifts, holidays, overrides) flag existing days instead of recomputing them inline;
+   * the next read of those days recomputes them (see AttendanceSettleService).
+   */
+  async markStale(employeeIds: readonly string[] | 'ALL', from: IsoDate, to: IsoDate): Promise<void> {
+    await this.db.tenant.attendanceDay.updateMany({
+      where: {
+        attendanceDate: { gte: toDbDate(from), lte: toDbDate(to) },
+        periodLocked: false,
+        ...(employeeIds === 'ALL' ? {} : { employeeId: { in: [...employeeIds] } }),
+      },
+      data: { needsRecompute: true },
     });
   }
 
@@ -81,10 +115,6 @@ export class AttendanceDayService {
     const instance = shiftInstance(date, inputs.shift, ctx.timezone);
     const dutyMinutes = ctx.dutyMinutesOverride ?? inputs.shift?.dutyMinutes ?? DEFAULT_DUTY_MINUTES;
     const leave = inputs.leave && (cls.dayType === 'WORKING' || inputs.leave.countsNonWorking) ? inputs.leave : null;
-    const otDecision =
-      existing?.otDecidedAt && (existing.otState === 'APPROVED' || existing.otState === 'REJECTED')
-        ? { state: existing.otState, approvedMinutes: existing.otApprovedMinutes }
-        : null;
     const isFinal = now >= instance.windowEndAt;
     const result = computeDay({
       dayType: cls.dayType,
@@ -99,7 +129,7 @@ export class AttendanceDayService {
       overtimeEnabled: ctx.overtimeEnabled,
       leave: leave ? { fraction: leave.fraction, paid: leave.paid } : null,
       manualMark: inputs.manualMark ? { status: inputs.manualMark.status as ManualMarkStatus, leavePaid: inputs.manualMark.leavePaid } : null,
-      otDecision,
+      regularization: inputs.regularization ? { status: inputs.regularization.status, approvedMinutes: inputs.regularization.approvedMinutes } : null,
       isFinal,
     });
     const leavePaid = inputs.manualMark ? inputs.manualMark.leavePaid : (leave?.paid ?? true);
@@ -121,6 +151,11 @@ export class AttendanceDayService {
       firstPunchAt: result.firstPunchAt,
       lastPunchAt: result.lastPunchAt,
       workedMinutes: result.workedMinutes,
+      outsideEarlyMinutes: result.outsideEarlyMinutes,
+      outsideLateMinutes: result.outsideLateMinutes,
+      outsideMinutes: result.outsideMinutes,
+      regState: result.regState,
+      regApprovedMinutes: result.regApprovedMinutes,
       lateMinutes: result.lateMinutes,
       earlyLeaveMinutes: result.earlyLeaveMinutes,
       isLate: result.isLate,
@@ -144,14 +179,18 @@ export class AttendanceDayService {
       engineVersion: ATTENDANCE_ENGINE_VERSION,
     };
     const inputsHash = sha256Hex(JSON.stringify({ ...data, leaveFraction: result.leaveFraction, paidFraction: result.paidFraction, lopFraction: result.lopFraction }));
+    const previousRegState = existing?.regState ?? null;
     if (existing && existing.inputsHash === inputsHash) {
-      return { date, result, changed: false };
+      if (existing.needsRecompute) {
+        await client.attendanceDay.update({ where: { id: existing.id }, data: { needsRecompute: false } });
+      }
+      return { date, result, changed: false, previousRegState };
     }
     await client.attendanceDay.upsert({
       where: { employeeId_attendanceDate: { employeeId: ctx.employeeId, attendanceDate: toDbDate(date) } },
-      update: { ...data, inputsHash, computedAt: now },
+      update: { ...data, needsRecompute: false, inputsHash, computedAt: now },
       create: { ...data, tenantId: ctx.tenantId, employeeId: ctx.employeeId, attendanceDate: toDbDate(date), inputsHash, computedAt: now },
     });
-    return { date, result, changed: true };
+    return { date, result, changed: true, previousRegState };
   }
 }

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ATTENDANCE_STATUSES, LIVENESS_STEPS, MANUAL_MARK_STATUSES } from '../enums.js';
+import { ATTENDANCE_STATUSES, LIVENESS_STEPS, MANUAL_MARK_STATUSES, REG_REQUEST_STATUSES } from '../enums.js';
 import { isoDateSchema, monthSchema, paginationQuerySchema, reasonSchema } from './common.js';
 
 export const manualMarkSchema = z
@@ -50,13 +50,28 @@ export const dashboardQuerySchema = z.object({
 });
 export type DashboardQuery = z.infer<typeof dashboardQuerySchema>;
 
-export const overtimeDecisionSchema = z.object({
-  employeeId: z.uuid(),
+// ---- Regularization: counting time worked outside working hours ---------------
+
+export const regularizationRequestSchema = z.object({
   date: isoDateSchema,
-  approvedMinutes: z.coerce.number().int().min(0).max(960),
+  reason: reasonSchema,
+});
+export type RegularizationRequestInput = z.infer<typeof regularizationRequestSchema>;
+
+/** `approvedMinutes` omitted on approval = all outside minutes of the day. */
+export const regularizationDecisionSchema = z.object({
+  decision: z.enum(['APPROVED', 'REJECTED']),
+  approvedMinutes: z.coerce.number().int().min(1).max(1440).optional(),
   note: z.string().trim().max(300).optional(),
 });
-export type OvertimeDecisionInput = z.infer<typeof overtimeDecisionSchema>;
+export type RegularizationDecisionInput = z.infer<typeof regularizationDecisionSchema>;
+
+export const regularizationListQuerySchema = paginationQuerySchema.extend({
+  status: z.enum(REG_REQUEST_STATUSES).optional(),
+  from: isoDateSchema.optional(),
+  to: isoDateSchema.optional(),
+});
+export type RegularizationListQuery = z.infer<typeof regularizationListQuerySchema>;
 
 // ---- Mobile punch flow -------------------------------------------------------
 

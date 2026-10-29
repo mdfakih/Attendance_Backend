@@ -78,6 +78,8 @@ model EmployeePaySummary {
   projectedNet      Decimal?     @map("projected_net") @db.Decimal(14, 2)
   flags             String[]     @default([])
   status            PayStatus    @default(OPEN)
+  /// Set when attendance, salary or adjustments change; the next read recomputes.
+  isStale           Boolean      @default(false) @map("is_stale")
   snapshot          Json?
   inputsHash        String       @map("inputs_hash")
   engineVersion     String       @map("engine_version")

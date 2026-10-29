@@ -3,6 +3,8 @@ import { dashboardQuerySchema } from '@attendance/contracts';
 import type { z } from 'zod';
 import { RequirePermission, TenantApi } from '../../core/auth/decorators.js';
 import { ZQuery } from '../../core/http/zod.js';
+import { AttendanceModule } from '../attendance/attendance.module.js';
+import { HousekeepingModule } from '../housekeeping/housekeeping.module.js';
 import { DashboardService } from './dashboard.service.js';
 
 @TenantApi()
@@ -28,6 +30,7 @@ export class DashboardController {
 }
 
 @Module({
+  imports: [AttendanceModule, HousekeepingModule],
   controllers: [DashboardController],
   providers: [DashboardService],
 })

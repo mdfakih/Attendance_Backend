@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import type { ManualMarkInput, OvertimeDecisionInput, RevokeMarkInput } from '@attendance/contracts';
+import type { ManualMarkInput, RevokeMarkInput } from '@attendance/contracts';
 import { AuditService } from '../../core/audit/audit.service.js';
 import { isInScope } from '../../core/auth/scope.js';
 import { currentContext, requireTenantId, requireTenantUser } from '../../core/context/request-context.js';
@@ -86,52 +86,6 @@ export class AttendanceMarkService {
     });
     const day = await this.days.recomputeDay(input.employeeId, input.date);
     return { status: day?.result.finalStatus ?? null };
-  }
-
-  async decideOvertime(input: OvertimeDecisionInput) {
-    await this.employeeInScope(input.employeeId);
-    await this.assertMonthOpen(input.date);
-    const day = await this.db.tenant.attendanceDay.findUnique({
-      where: { employeeId_attendanceDate: { employeeId: input.employeeId, attendanceDate: toDbDate(input.date) } },
-    });
-    if (!day || day.otMinutes === 0) throw new AppError('CONFLICT', 'There is no overtime on this day.');
-    const approved = Math.min(input.approvedMinutes, day.otMinutes);
-    await this.db.tenant.attendanceDay.update({
-      where: { id: day.id },
-      data: {
-        otState: approved > 0 ? 'APPROVED' : 'REJECTED',
-        otApprovedMinutes: approved,
-        otDecidedById: requireTenantUser().membershipId,
-        otDecidedAt: new Date(),
-        inputsHash: '',
-      },
-    });
-    await this.audit.record({
-      action: 'attendance.ot.decide',
-      entityType: 'employee',
-      entityId: input.employeeId,
-      after: { date: input.date, approvedMinutes: approved },
-      reason: input.note,
-    });
-    await this.days.queuePay(requireTenantId(), input.employeeId, monthOf(input.date));
-    return { approvedMinutes: approved };
-  }
-
-  async pendingOvertime() {
-    const rows = await this.db.tenant.attendanceDay.findMany({
-      where: { otState: 'PENDING' },
-      orderBy: { attendanceDate: 'desc' },
-      take: 500,
-      include: { employee: { select: { id: true, fullName: true, employeeCode: true, branchId: true, departmentId: true } } },
-    });
-    return rows
-      .filter((r) => isInScope(r.employee))
-      .map((r) => ({
-        employee: { id: r.employee.id, fullName: r.employee.fullName, employeeCode: r.employee.employeeCode },
-        date: r.attendanceDate.toISOString().slice(0, 10),
-        workedMinutes: r.workedMinutes,
-        otMinutes: r.otMinutes,
-      }));
   }
 
   private async employeeInScope(employeeId: string) {

@@ -105,6 +105,7 @@ model Employee {
   attendanceDays     AttendanceDay[]
   punches            Punch[]
   leaveRequests      LeaveRequest[]
+  regularizations    RegularizationRequest[]
   paySummaries       EmployeePaySummary[]
 
   @@index([tenantId, status])

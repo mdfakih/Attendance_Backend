@@ -20,14 +20,16 @@ import { punchGate, classifyDay } from '../../engines/attendance/calendar.js';
 import { attributePunch, shiftInstance } from '../../engines/attendance/shift.js';
 import { checkGeofence, type GeofenceSite } from '../../engines/geo/geofence.js';
 import { type IsoDate, toDbDate } from '../../engines/time/dates.js';
-import { AttendanceDayService } from '../attendance/attendance-day.service.js';
+import { AttendanceDayService, employeeDayLock, type WrittenDay } from '../attendance/attendance-day.service.js';
 import { DayInputsLoader, type DayInputs } from '../attendance/day-inputs.loader.js';
+import { RegularizationService } from '../attendance/regularization.service.js';
 import { MobileAuthService } from './mobile-auth.service.js';
 
 const INTENT_TTL_SEC = 300;
-const MAX_PUNCHES_PER_DAY = 100;
 const LIVENESS_MIN_MS = 500;
 const LIVENESS_MAX_MS = 60_000;
+/** The phone schedules its own "did you forget to punch out?" reminder this long after the shift ends. */
+const REMINDER_AFTER_MIN = 30;
 
 interface Intent {
   readonly intentId: string;
@@ -50,7 +52,15 @@ interface DayContext {
   readonly timezone: string;
   readonly sites: GeofenceSite[];
   readonly accuracyBufferCapM: number;
+  readonly missingOutReminder: boolean;
   readonly outOfWindow: boolean;
+}
+
+/** When the phone should remind the employee to punch out, or null when the day is not open. */
+export function reminderAt(day: { punchCount: number; expectedEndAt: Date | null } | null, enabled: boolean, now: Date): string | null {
+  if (!enabled || !day || day.punchCount % 2 === 0 || !day.expectedEndAt) return null;
+  const at = new Date(day.expectedEndAt.getTime() + REMINDER_AFTER_MIN * 60_000);
+  return at > now ? at.toISOString() : null;
 }
 
 function randomChallenge(): LivenessStep[] {
@@ -67,6 +77,7 @@ export class PunchService {
     private readonly cache: CacheService,
     private readonly storage: StorageService,
     private readonly auth: MobileAuthService,
+    private readonly regularizations: RegularizationService,
   ) {}
 
   async context() {
@@ -82,23 +93,38 @@ export class PunchService {
       select: { serverTime: true, direction: true },
     });
     const instance = shiftInstance(ctx.date, ctx.inputs.shift, ctx.timezone);
+    const { maxPunchesPerDay, hoursMode } = ctx.inputs.policy;
+    const limitReached = punches.length >= maxPunchesPerDay;
     return {
       serverTime: new Date().toISOString(),
       date: ctx.date,
       dayType: ctx.dayType,
       holidayName: ctx.inputs.holiday?.name ?? null,
-      punchAllowed: gate.allowed,
-      blockedReason: gate.allowed ? null : gate.reason,
+      punchAllowed: gate.allowed && !limitReached,
+      blockedReason: !gate.allowed ? gate.reason : limitReached ? 'PUNCH_LIMIT' : null,
       shift: ctx.inputs.shift
         ? { startAt: iso(instance.startAt), endAt: iso(instance.endAt), startTime: ctx.inputs.shift.startTime, endTime: ctx.inputs.shift.endTime }
         : null,
       sites: ctx.sites.map((s) => ({ id: s.id, name: s.name, lat: s.lat, lng: s.lng, radiusM: s.radiusM })),
       minPunchGapSec: ctx.inputs.policy.minPunchGapSec,
+      /** FIRST_IN_LAST_OUT: another OUT replaces the earlier punch-out time. SUM_OF_PAIRS: every IN→OUT pair counts. */
+      hoursMode,
+      maxPunchesPerDay,
+      punchesLeft: Math.max(maxPunchesPerDay - punches.length, 0),
       nextDirection: punches.length % 2 === 0 ? 'IN' : 'OUT',
       punches: punches.map((p) => ({ at: iso(p.serverTime), direction: p.direction })),
+      reminderAt: reminderAt(day, ctx.missingOutReminder, new Date()),
       today: day
-        ? { status: day.finalStatus, workedMinutes: day.workedMinutes, isLate: day.isLate, firstPunchAt: iso(day.firstPunchAt), lastPunchAt: iso(day.lastPunchAt) }
-        : { status: 'NOT_STARTED', workedMinutes: 0, isLate: false, firstPunchAt: null, lastPunchAt: null },
+        ? {
+            status: day.finalStatus,
+            workedMinutes: day.workedMinutes,
+            outsideMinutes: day.outsideMinutes,
+            regState: day.regState,
+            isLate: day.isLate,
+            firstPunchAt: iso(day.firstPunchAt),
+            lastPunchAt: iso(day.lastPunchAt),
+          }
+        : { status: 'NOT_STARTED', workedMinutes: 0, outsideMinutes: 0, regState: 'NOT_APPLICABLE', isLate: false, firstPunchAt: null, lastPunchAt: null },
     };
   }
 
@@ -113,6 +139,9 @@ export class PunchService {
     const geo = checkGeofence(fix, ctx.sites, ctx.accuracyBufferCapM);
     if (!geo.ok) throw await this.rejection(employeeId, bindingId, 'INTENT', geo.reason, fix, geo.nearest);
     await this.assertGap(employeeId, ctx.inputs.policy.minPunchGapSec);
+    // Fail before the selfie and liveness steps rather than at commit.
+    const today = await this.db.tenant.punch.count({ where: { employeeId, attendanceDate: toDbDate(ctx.date), voidedAt: null } });
+    if (today >= ctx.inputs.policy.maxPunchesPerDay) throw new AppError('PUNCH_LIMIT');
     const intentId = randomUUID();
     const [yyyy, mm, dd] = ctx.date.split('-');
     const intent: Intent = {
@@ -169,10 +198,11 @@ export class PunchService {
       input.isMock ? 'MOCK_LOCATION' : null,
     ].filter((f): f is string => f !== null);
 
+    let written: WrittenDay | null = null;
     const punch = await this.db.tenant.$transaction(async (tx) => {
-      await this.db.lock(tx, `punch:${employeeId}`);
+      await this.db.lock(tx, employeeDayLock(employeeId));
       const count = await tx.punch.count({ where: { employeeId, attendanceDate: toDbDate(ctx.date), voidedAt: null } });
-      if (count >= MAX_PUNCHES_PER_DAY) throw new AppError('RATE_LIMITED', 'Daily punch limit reached.');
+      if (count >= ctx.inputs.policy.maxPunchesPerDay) throw new AppError('PUNCH_LIMIT');
       const row = await tx.punch.create({
         data: {
           id: intent.intentId,
@@ -198,19 +228,33 @@ export class PunchService {
           appVersion: binding?.appVersion ?? null,
         },
       });
-      await this.days.recomputeDay(employeeId, ctx.date, tx);
+      written = await this.days.recomputeDay(employeeId, ctx.date, tx);
       return row;
     });
     await this.cache.del(`pi:${intent.intentId}`);
     await this.db.tenant.deviceBinding.update({ where: { id: bindingId }, data: { lastSeenAt: now } });
-    return this.result(employeeId, ctx.date, punch);
+    await this.regularizations.noticeOutsideTime(employeeId, written);
+    return this.result(employeeId, ctx.date, punch, ctx.missingOutReminder);
   }
 
-  private async result(employeeId: string, date: IsoDate, punch: { id: string; direction: string; serverTime: Date; sequenceNo: number }) {
+  private async result(employeeId: string, date: IsoDate, punch: { id: string; direction: string; serverTime: Date; sequenceNo: number }, remind = true) {
     const day = await this.db.tenant.attendanceDay.findUnique({ where: { employeeId_attendanceDate: { employeeId, attendanceDate: toDbDate(date) } } });
     return {
       punch: { id: punch.id, direction: punch.direction, at: iso(punch.serverTime), sequenceNo: punch.sequenceNo },
-      day: day ? { date, status: day.finalStatus, workedMinutes: day.workedMinutes, isLate: day.isLate, punchCount: day.punchCount } : null,
+      day: day
+        ? {
+            date,
+            status: day.finalStatus,
+            workedMinutes: day.workedMinutes,
+            outsideMinutes: day.outsideMinutes,
+            regState: day.regState,
+            isLate: day.isLate,
+            punchCount: day.punchCount,
+            expectedEndAt: iso(day.expectedEndAt),
+          }
+        : null,
+      /** Schedule a local reminder at this time; null = cancel any scheduled reminder. */
+      reminderAt: reminderAt(day, remind, new Date()),
     };
   }
 
@@ -265,6 +309,7 @@ export class PunchService {
       timezone: tenant.timezone,
       sites: siteRows.map((s) => ({ id: s.id, name: s.name, lat: s.lat, lng: s.lng, radiusM: s.radiusM, maxAccuracyM: s.maxAccuracyM })),
       accuracyBufferCapM: settings.accuracyBufferCapM,
+      missingOutReminder: settings.missingOutReminder,
       outOfWindow: attribution.outOfWindow,
     };
   }

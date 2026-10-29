@@ -1,17 +1,21 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { ExportRequestInput } from '@attendance/contracts';
 import { AuditService } from '../../core/audit/audit.service.js';
+import { employeeScopeWhere } from '../../core/auth/scope.js';
 import { requireContext, requireTenantId, requireTenantUser } from '../../core/context/request-context.js';
 import { DbService } from '../../core/database/db.service.js';
 import { AppError, notFound } from '../../core/http/app-error.js';
-import { QUEUE, type ExportJobData } from '../../core/queue/queues.js';
-import { QueueService } from '../../core/queue/queue.service.js';
 import { StorageService } from '../../core/storage/storage.service.js';
 import { iso } from '../../common/serialize.js';
 import type { Prisma } from '../../generated/prisma/client.js';
+import { monthRange } from '../../engines/time/dates.js';
+import { AttendanceSettleService } from '../attendance/attendance-settle.service.js';
+import { PayService } from '../pay/pay.service.js';
 import { ExportGenerators, type GeneratedFile } from './generators.js';
 
 const EXPORT_TTL_DAYS = 7;
+/** Longer than any function or request timeout, so a job still open after this was abandoned. */
+const ABANDONED_AFTER_MS = 15 * 60_000;
 
 export interface ScopeSnapshot {
   readonly roleKind: 'ADMIN' | 'MANAGER';
@@ -25,10 +29,11 @@ export class ExportsService {
 
   constructor(
     private readonly db: DbService,
-    private readonly queues: QueueService,
     private readonly storage: StorageService,
     private readonly audit: AuditService,
     private readonly generators: ExportGenerators,
+    private readonly settle: AttendanceSettleService,
+    private readonly pay: PayService,
   ) {}
 
   async request(input: ExportRequestInput) {
@@ -48,12 +53,49 @@ export class ExportsService {
         expiresAt: new Date(Date.now() + EXPORT_TTL_DAYS * 86_400_000),
       },
     });
-    const data: ExportJobData = { tenantId: job.tenantId, exportJobId: job.id };
-    await this.queues.add(QUEUE.EXPORTS, 'generate', data, { jobId: `export-${job.id}` });
-    return { id: job.id, status: job.status };
+    // Generated inline within the request. A failure is recorded on the job, not thrown.
+    let prepared = true;
+    try {
+      await this.prepare(input);
+    } catch (error: unknown) {
+      prepared = false;
+      await this.fail(job.id, error);
+    }
+    if (prepared) {
+      try {
+        await this.run(job.id);
+      } catch (error: unknown) {
+        this.logger.warn(`Export ${job.id} did not complete: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    const done = await this.db.tenant.exportJob.findUniqueOrThrow({ where: { id: job.id } });
+    return { id: done.id, status: done.status, error: done.error };
+  }
+
+  /** Brings the stored days and pay summaries the export reads up to date, within the requester's scope. */
+  private async prepare(input: ExportRequestInput): Promise<void> {
+    if (input.type === 'ATTENDANCE_REGISTER' && input.month) {
+      const { start, end } = monthRange(input.month);
+      await this.settle.settle(start, end, employeeScopeWhere());
+    } else if (input.type === 'SALARY_REGISTER' && input.month) {
+      await this.pay.settleMonth(input.month, employeeScopeWhere());
+    } else if (input.type === 'ATTENDANCE_DAILY' && input.date) {
+      await this.settle.settle(input.date, input.date, employeeScopeWhere());
+    }
+  }
+
+  private async fail(jobId: string, error: unknown): Promise<void> {
+    const message = error instanceof Error ? error.message : 'Export failed';
+    this.logger.error(`Export ${jobId} failed: ${message}`);
+    await this.db.tenant.exportJob.update({ where: { id: jobId }, data: { status: 'FAILED', error: message.slice(0, 500), finishedAt: new Date() } });
   }
 
   async list() {
+    // A request cut off mid-generation (e.g. a function timeout) leaves its job open; close it out.
+    await this.db.tenant.exportJob.updateMany({
+      where: { requestedById: requireTenantUser().membershipId, status: { in: ['QUEUED', 'RUNNING'] }, createdAt: { lt: new Date(Date.now() - ABANDONED_AFTER_MS) } },
+      data: { status: 'FAILED', error: 'The export did not finish. Please try again.', finishedAt: new Date() },
+    });
     const rows = await this.db.tenant.exportJob.findMany({ where: { requestedById: requireTenantUser().membershipId }, orderBy: { createdAt: 'desc' }, take: 50 });
     return rows.map((j) => ({
       id: j.id,
@@ -79,7 +121,7 @@ export class ExportsService {
     return this.storage.presignGet(file.objectKey, 120, file.fileName);
   }
 
-  /** Worker entry point; caller sets the tenant context (with the requester's scope). */
+  /** Runs inside the requester's own request, so the tenant context already carries their scope. */
   async run(jobId: string): Promise<void> {
     const job = await this.db.tenant.exportJob.findUnique({ where: { id: jobId } });
     if (!job || job.status === 'DONE') return;

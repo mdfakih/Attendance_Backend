@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import {
   type EmployeeCreateInput,
   type EmployeeDeactivateInput,
@@ -12,10 +12,9 @@ import { PrincipalService } from '../../core/auth/principal.service.js';
 import { RefreshTokenService } from '../../core/auth/refresh-token.service.js';
 import { employeeScopeWhere, isInScope } from '../../core/auth/scope.js';
 import { currentContext, requireTenantId } from '../../core/context/request-context.js';
+import { runInBackground } from '../../core/background.js';
 import { DbService, type TenantTx } from '../../core/database/db.service.js';
 import { AppError, notFound } from '../../core/http/app-error.js';
-import { QUEUE } from '../../core/queue/queues.js';
-import { QueueService } from '../../core/queue/queue.service.js';
 import { dateOnly, iso, money } from '../../common/serialize.js';
 import type { Prisma } from '../../generated/prisma/client.js';
 import { toDbDate } from '../../engines/time/dates.js';
@@ -37,13 +36,14 @@ function canSeeSalary(): boolean {
 
 @Injectable()
 export class EmployeesService {
+  private readonly logger = new Logger(EmployeesService.name);
+
   constructor(
     private readonly db: DbService,
     private readonly audit: AuditService,
     private readonly codes: ActivationCodesService,
     private readonly refresh: RefreshTokenService,
     private readonly principals: PrincipalService,
-    private readonly queues: QueueService,
   ) {}
 
   async tenantInfo(): Promise<TenantInfo> {
@@ -197,7 +197,7 @@ export class EmployeesService {
     await this.assertPhoneAvailable(input.phone);
     if (input.employeeCode) await this.assertCodeAvailable(tenant.id, input.employeeCode);
     const result = await this.db.tenant.$transaction((tx) => this.createInTx(tx, tenant, input, 'SINGLE'));
-    await this.afterCreate(result.id);
+    this.afterCreate([result.id]);
     return result;
   }
 
@@ -272,11 +272,20 @@ export class EmployeesService {
     return { id: employee.id, activationCode };
   }
 
-  async afterCreate(employeeId: string): Promise<void> {
+  /**
+   * Emails activation codes when the company turned that on. Runs after the response, one email at a
+   * time (a bulk import must not open hundreds of SMTP connections), and never fails the create.
+   */
+  afterCreate(employeeIds: readonly string[]): void {
     const ctx = currentContext();
-    if (ctx?.features?.AUTO_EMAIL_ACTIVATION_CODES && ctx.tenantId) {
-      await this.queues.add(QUEUE.NOTIFY, 'activation-email', { tenantId: ctx.tenantId, employeeId });
-    }
+    if (!ctx?.features?.AUTO_EMAIL_ACTIVATION_CODES || !ctx.tenantId || employeeIds.length === 0) return;
+    runInBackground('Activation emails', this.logger, async () => {
+      for (const id of employeeIds) {
+        await this.codes.emailActivationCode(id).catch((error: unknown) => {
+          this.logger.error(`Activation email for ${id} failed: ${error instanceof Error ? error.message : String(error)}`);
+        });
+      }
+    });
   }
 
   async update(id: string, input: EmployeeUpdateInput) {

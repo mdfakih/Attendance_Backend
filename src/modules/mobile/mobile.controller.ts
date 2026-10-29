@@ -10,12 +10,14 @@ import {
   mobileRefreshSchema,
   punchCommitSchema,
   punchIntentSchema,
+  regularizationRequestSchema,
   selfieUploadRequestSchema,
 } from '@attendance/contracts';
 import { z } from 'zod';
 import { AllowWithoutConsent, EmployeeApi, Public } from '../../core/auth/decorators.js';
 import { requireEmployee } from '../../core/context/request-context.js';
 import { ZBody, ZQuery } from '../../core/http/zod.js';
+import { RegularizationService } from '../attendance/regularization.service.js';
 import { EmployeeSelfService } from './employee-self.service.js';
 import { MobileAuthService } from './mobile-auth.service.js';
 import { PunchService } from './punch.service.js';
@@ -62,6 +64,7 @@ export class MobileController {
     private readonly self: EmployeeSelfService,
     private readonly punch: PunchService,
     private readonly auth: MobileAuthService,
+    private readonly regularizations: RegularizationService,
   ) {}
 
   @AllowWithoutConsent()
@@ -111,6 +114,22 @@ export class MobileController {
   @Get('attendance/days/:date')
   day(@Param('date') date: string) {
     return this.self.day(isoDateSchema.parse(date));
+  }
+
+  /** Days with time outside working hours and the employee's request to count it. */
+  @Get('regularizations')
+  regularizationMonth(@ZQuery(employeeMonthQuerySchema) q: z.infer<typeof employeeMonthQuerySchema>) {
+    return this.regularizations.employeeMonth(q.month);
+  }
+
+  @Post('regularizations')
+  requestRegularization(@ZBody(regularizationRequestSchema) body: z.infer<typeof regularizationRequestSchema>) {
+    return this.regularizations.request(body);
+  }
+
+  @Post('regularizations/:id/cancel')
+  cancelRegularization(@Param('id', ParseUUIDPipe) id: string) {
+    return this.regularizations.cancel(id);
   }
 
   @Get('holidays')

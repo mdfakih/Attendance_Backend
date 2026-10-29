@@ -142,24 +142,25 @@ export class ImportService {
     await this.employees.assertCapacity(tenant, imp.validRows);
     await this.db.tenant.employeeImport.update({ where: { id: importId }, data: { status: 'COMMITTING' } });
     const rows = await this.db.tenant.employeeImportRow.findMany({ where: { importId, status: 'VALID' }, orderBy: { rowNo: 'asc' } });
-    let committed = 0;
+    const created: string[] = [];
     for (const row of rows) {
       const input = employeeCreateSchema.parse(row.normalized);
       try {
         const { id } = await this.db.tenant.$transaction((tx) => this.employees.createInTx(tx, tenant, input, 'IMPORT'));
         await this.db.tenant.employeeImportRow.update({ where: { id: row.id }, data: { status: 'COMMITTED', employeeId: id } });
-        await this.employees.afterCreate(id);
-        committed += 1;
+        created.push(id);
       } catch (error: unknown) {
         const message = error instanceof AppError ? error.message : 'Could not create this employee.';
         await this.db.tenant.employeeImportRow.update({ where: { id: row.id }, data: { status: 'ERROR', errors: [message] } });
       }
     }
+    const committed = created.length;
     await this.db.tenant.employeeImport.update({
       where: { id: importId },
       data: { status: 'COMMITTED', committedRows: committed, committedAt: new Date() },
     });
     await this.audit.record({ action: 'employee.import.commit', entityType: 'employee_import', entityId: importId, after: { committed } });
+    this.employees.afterCreate(created);
     return this.preview(importId);
   }
 

@@ -2,37 +2,37 @@
 
 /// id = punch intent id, which makes commits idempotent.
 model Punch {
-  id            String         @id @db.Uuid
-  tenantId      String         @map("tenant_id") @db.Uuid
-  employeeId    String         @map("employee_id") @db.Uuid
-  employee      Employee       @relation(fields: [employeeId], references: [id])
-  bindingId     String?        @map("binding_id") @db.Uuid
-  attendanceDate DateTime      @map("attendance_date") @db.Date
-  sequenceNo    Int            @map("sequence_no")
-  direction     PunchDirection
-  serverTime    DateTime       @map("server_time") @db.Timestamptz
-  deviceTime    DateTime?      @map("device_time") @db.Timestamptz
-  clockSkewSec  Int?           @map("clock_skew_sec")
-  source        PunchSource    @default(APP)
-  createdById   String?        @map("created_by_id") @db.Uuid
-  reason        String?
-  lat           Float?
-  lng           Float?
-  accuracyM     Float?         @map("accuracy_m")
-  isMock        Boolean?       @map("is_mock")
-  siteId        String?        @map("site_id") @db.Uuid
-  distanceM     Float?         @map("distance_m")
-  selfieKey     String?        @map("selfie_key")
-  selfieSha256  String?        @map("selfie_sha256")
-  thumbKey      String?        @map("thumb_key")
-  selfiePurgedAt DateTime?     @map("selfie_purged_at") @db.Timestamptz
-  liveness      Json?
-  flags         String[]       @default([])
-  appVersion    String?        @map("app_version")
-  voidedAt      DateTime?      @map("voided_at") @db.Timestamptz
-  voidedById    String?        @map("voided_by_id") @db.Uuid
-  voidReason    String?        @map("void_reason")
-  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz
+  id             String         @id @db.Uuid
+  tenantId       String         @map("tenant_id") @db.Uuid
+  employeeId     String         @map("employee_id") @db.Uuid
+  employee       Employee       @relation(fields: [employeeId], references: [id])
+  bindingId      String?        @map("binding_id") @db.Uuid
+  attendanceDate DateTime       @map("attendance_date") @db.Date
+  sequenceNo     Int            @map("sequence_no")
+  direction      PunchDirection
+  serverTime     DateTime       @map("server_time") @db.Timestamptz
+  deviceTime     DateTime?      @map("device_time") @db.Timestamptz
+  clockSkewSec   Int?           @map("clock_skew_sec")
+  source         PunchSource    @default(APP)
+  createdById    String?        @map("created_by_id") @db.Uuid
+  reason         String?
+  lat            Float?
+  lng            Float?
+  accuracyM      Float?         @map("accuracy_m")
+  isMock         Boolean?       @map("is_mock")
+  siteId         String?        @map("site_id") @db.Uuid
+  distanceM      Float?         @map("distance_m")
+  selfieKey      String?        @map("selfie_key")
+  selfieSha256   String?        @map("selfie_sha256")
+  thumbKey       String?        @map("thumb_key")
+  selfiePurgedAt DateTime?      @map("selfie_purged_at") @db.Timestamptz
+  liveness       Json?
+  flags          String[]       @default([])
+  appVersion     String?        @map("app_version")
+  voidedAt       DateTime?      @map("voided_at") @db.Timestamptz
+  voidedById     String?        @map("voided_by_id") @db.Uuid
+  voidReason     String?        @map("void_reason")
+  createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz
 
   @@index([tenantId, employeeId, attendanceDate])
   @@index([tenantId, serverTime(sort: Desc)])
@@ -63,63 +63,98 @@ model PunchRejection {
 
 /// DERIVED: written only by the attendance day writer from punches, calendar, leave and manual marks.
 model AttendanceDay {
-  id                  String           @id @default(uuid(7)) @db.Uuid
-  tenantId            String           @map("tenant_id") @db.Uuid
-  employeeId          String           @map("employee_id") @db.Uuid
-  employee            Employee         @relation(fields: [employeeId], references: [id])
-  attendanceDate      DateTime         @map("attendance_date") @db.Date
-  branchId            String           @map("branch_id") @db.Uuid
-  departmentId        String?          @map("department_id") @db.Uuid
-  dayType             DayType          @map("day_type")
-  holidayId           String?          @map("holiday_id") @db.Uuid
-  holidayPaid         Boolean          @default(true) @map("holiday_paid")
-  overrideId          String?          @map("override_id") @db.Uuid
-  shiftId             String?          @map("shift_id") @db.Uuid
-  policyId            String?          @map("policy_id") @db.Uuid
-  policyVersion       Int?             @map("policy_version")
-  expectedStartAt     DateTime?        @map("expected_start_at") @db.Timestamptz
-  expectedEndAt       DateTime?        @map("expected_end_at") @db.Timestamptz
-  windowEndAt         DateTime?        @map("window_end_at") @db.Timestamptz
-  dutyMinutes         Int              @default(0) @map("duty_minutes")
-  punchCount          Int              @default(0) @map("punch_count")
-  firstPunchAt        DateTime?        @map("first_punch_at") @db.Timestamptz
-  lastPunchAt         DateTime?        @map("last_punch_at") @db.Timestamptz
-  workedMinutes       Int              @default(0) @map("worked_minutes")
-  lateMinutes         Int              @default(0) @map("late_minutes")
-  earlyLeaveMinutes   Int              @default(0) @map("early_leave_minutes")
-  isLate              Boolean          @default(false) @map("is_late")
-  isMissingOut        Boolean          @default(false) @map("is_missing_out")
-  otMinutes           Int              @default(0) @map("ot_minutes")
-  otState             OtState          @default(NOT_APPLICABLE) @map("ot_state")
-  otApprovedMinutes   Int              @default(0) @map("ot_approved_minutes")
-  otDecidedById       String?          @map("ot_decided_by_id") @db.Uuid
-  otDecidedAt         DateTime?        @map("ot_decided_at") @db.Timestamptz
-  leaveRequestId      String?          @map("leave_request_id") @db.Uuid
-  leaveTypeId         String?          @map("leave_type_id") @db.Uuid
-  leaveFraction       Decimal          @default(0) @map("leave_fraction") @db.Decimal(3, 2)
-  leavePaid           Boolean          @default(true) @map("leave_paid")
-  computedStatus      AttendanceStatus @map("computed_status")
-  finalStatus         AttendanceStatus @map("final_status")
-  statusSource        String           @default("COMPUTED") @map("status_source")
-  manualMarkId        String?          @map("manual_mark_id") @db.Uuid
-  paidFraction        Decimal          @default(0) @map("paid_fraction") @db.Decimal(3, 2)
-  lopFraction         Decimal          @default(0) @map("lop_fraction") @db.Decimal(3, 2)
-  flags               String[]         @default([])
-  isFinalized         Boolean          @default(false) @map("is_finalized")
-  finalizedAt         DateTime?        @map("finalized_at") @db.Timestamptz
-  periodLocked        Boolean          @default(false) @map("period_locked")
-  missingOutRemindedAt DateTime?       @map("missing_out_reminded_at") @db.Timestamptz
-  inputsHash          String           @map("inputs_hash")
-  engineVersion       String           @map("engine_version")
-  computedAt          DateTime         @map("computed_at") @db.Timestamptz
-  createdAt           DateTime         @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt           DateTime         @updatedAt @map("updated_at") @db.Timestamptz
+  id                   String           @id @default(uuid(7)) @db.Uuid
+  tenantId             String           @map("tenant_id") @db.Uuid
+  employeeId           String           @map("employee_id") @db.Uuid
+  employee             Employee         @relation(fields: [employeeId], references: [id])
+  attendanceDate       DateTime         @map("attendance_date") @db.Date
+  branchId             String           @map("branch_id") @db.Uuid
+  departmentId         String?          @map("department_id") @db.Uuid
+  dayType              DayType          @map("day_type")
+  holidayId            String?          @map("holiday_id") @db.Uuid
+  holidayPaid          Boolean          @default(true) @map("holiday_paid")
+  overrideId           String?          @map("override_id") @db.Uuid
+  shiftId              String?          @map("shift_id") @db.Uuid
+  policyId             String?          @map("policy_id") @db.Uuid
+  policyVersion        Int?             @map("policy_version")
+  expectedStartAt      DateTime?        @map("expected_start_at") @db.Timestamptz
+  expectedEndAt        DateTime?        @map("expected_end_at") @db.Timestamptz
+  windowEndAt          DateTime?        @map("window_end_at") @db.Timestamptz
+  dutyMinutes          Int              @default(0) @map("duty_minutes")
+  punchCount           Int              @default(0) @map("punch_count")
+  firstPunchAt         DateTime?        @map("first_punch_at") @db.Timestamptz
+  lastPunchAt          DateTime?        @map("last_punch_at") @db.Timestamptz
+  /// Counted time: inside working hours plus approved outside time.
+  workedMinutes        Int              @default(0) @map("worked_minutes")
+  outsideEarlyMinutes  Int              @default(0) @map("outside_early_minutes")
+  outsideLateMinutes   Int              @default(0) @map("outside_late_minutes")
+  /// Outside time above the threshold; on an off day, all worked time.
+  outsideMinutes       Int              @default(0) @map("outside_minutes")
+  regState             RegState         @default(NOT_APPLICABLE) @map("reg_state")
+  regApprovedMinutes   Int              @default(0) @map("reg_approved_minutes")
+  lateMinutes          Int              @default(0) @map("late_minutes")
+  earlyLeaveMinutes    Int              @default(0) @map("early_leave_minutes")
+  isLate               Boolean          @default(false) @map("is_late")
+  isMissingOut         Boolean          @default(false) @map("is_missing_out")
+  otMinutes            Int              @default(0) @map("ot_minutes")
+  otState              OtState          @default(NOT_APPLICABLE) @map("ot_state")
+  otApprovedMinutes    Int              @default(0) @map("ot_approved_minutes")
+  otDecidedById        String?          @map("ot_decided_by_id") @db.Uuid
+  otDecidedAt          DateTime?        @map("ot_decided_at") @db.Timestamptz
+  leaveRequestId       String?          @map("leave_request_id") @db.Uuid
+  leaveTypeId          String?          @map("leave_type_id") @db.Uuid
+  leaveFraction        Decimal          @default(0) @map("leave_fraction") @db.Decimal(3, 2)
+  leavePaid            Boolean          @default(true) @map("leave_paid")
+  computedStatus       AttendanceStatus @map("computed_status")
+  finalStatus          AttendanceStatus @map("final_status")
+  statusSource         String           @default("COMPUTED") @map("status_source")
+  manualMarkId         String?          @map("manual_mark_id") @db.Uuid
+  paidFraction         Decimal          @default(0) @map("paid_fraction") @db.Decimal(3, 2)
+  lopFraction          Decimal          @default(0) @map("lop_fraction") @db.Decimal(3, 2)
+  flags                String[]         @default([])
+  isFinalized          Boolean          @default(false) @map("is_finalized")
+  finalizedAt          DateTime?        @map("finalized_at") @db.Timestamptz
+  periodLocked         Boolean          @default(false) @map("period_locked")
+  missingOutRemindedAt DateTime?        @map("missing_out_reminded_at") @db.Timestamptz
+  /// Set by bulk changes (shifts, holidays, overrides); the next read of the day recomputes it.
+  needsRecompute       Boolean          @default(false) @map("needs_recompute")
+  inputsHash           String           @map("inputs_hash")
+  engineVersion        String           @map("engine_version")
+  computedAt           DateTime         @map("computed_at") @db.Timestamptz
+  createdAt            DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt            DateTime         @updatedAt @map("updated_at") @db.Timestamptz
 
   @@unique([employeeId, attendanceDate])
   @@index([tenantId, attendanceDate, finalStatus])
   @@index([tenantId, attendanceDate, branchId])
   @@index([isFinalized, windowEndAt])
+  @@index([tenantId, needsRecompute, attendanceDate])
   @@map("attendance_days")
+}
+
+/// An employee's request to count time worked outside working hours on one day.
+/// live_key = "<employeeId>:<YYYY-MM-DD>" unless CANCELLED → one live request per employee-day.
+model RegularizationRequest {
+  id              String           @id @default(uuid(7)) @db.Uuid
+  tenantId        String           @map("tenant_id") @db.Uuid
+  employeeId      String           @map("employee_id") @db.Uuid
+  employee        Employee         @relation(fields: [employeeId], references: [id])
+  attendanceDate  DateTime         @map("attendance_date") @db.Date
+  /// Outside minutes when the employee asked; the decision may approve up to the current amount.
+  outsideMinutes  Int              @map("outside_minutes")
+  reason          String
+  status          RegRequestStatus @default(PENDING)
+  approvedMinutes Int              @default(0) @map("approved_minutes")
+  decidedById     String?          @map("decided_by_id") @db.Uuid
+  decidedAt       DateTime?        @map("decided_at") @db.Timestamptz
+  decisionNote    String?          @map("decision_note")
+  liveKey         String?          @unique @map("live_key")
+  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime         @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@index([tenantId, status, attendanceDate])
+  @@index([tenantId, employeeId, attendanceDate])
+  @@map("regularization_requests")
 }
 
 /// Append-only. The latest row per (employee, date) is effective; REVOKE removes the override.

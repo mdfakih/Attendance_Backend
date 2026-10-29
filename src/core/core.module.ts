@@ -7,8 +7,8 @@ import { TokenService } from './auth/token.service.js';
 import { ConfigModule } from './config/config.module.js';
 import { DatabaseModule } from './database/database.module.js';
 import { MailService } from './notify/mail.service.js';
+import { NotifyService } from './notify/notify.service.js';
 import { PushService } from './notify/push.service.js';
-import { QueueService } from './queue/queue.service.js';
 import { CacheService } from './redis/cache.service.js';
 import { RedisModule } from './redis/redis.module.js';
 import { StorageService } from './storage/storage.service.js';
@@ -17,16 +17,16 @@ const SERVICES = [
   AuditService,
   CacheService,
   MailService,
+  NotifyService,
   PasswordService,
   PrincipalService,
   PushService,
-  QueueService,
   RefreshTokenService,
   StorageService,
   TokenService,
 ];
 
-/** Cross-cutting infrastructure shared by the API and worker processes. */
+/** Cross-cutting infrastructure shared by all API modules. */
 @Global()
 @Module({
   imports: [ConfigModule, DatabaseModule, RedisModule],
