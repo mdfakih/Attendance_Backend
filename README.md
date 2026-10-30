@@ -1,6 +1,6 @@
-# Attendance Backend
+# KamaiGo — Backend
 
-NestJS 12 + Prisma 7 + PostgreSQL API for the attendance & pay-monitoring SaaS. One process, no background worker and no cron jobs (see [How work happens without a worker](#how-work-happens-without-a-worker)). Design docs live in [`docs/`](docs/): [PRD](docs/prd.md), [architecture](docs/architecture.md), [database schema](docs/database-schema.md), [implementation plan](docs/implementation-plan.md), [task list](docs/task-list.md), [cost estimate](docs/cost-estimate.md).
+NestJS 12 + Prisma 7 + PostgreSQL API for KamaiGo, the attendance & pay-monitoring SaaS. One process, no background worker and no cron jobs (see [How work happens without a worker](#how-work-happens-without-a-worker)). Design docs live in [`docs/`](docs/): [PRD](docs/prd.md), [architecture](docs/architecture.md), [database schema](docs/database-schema.md), [implementation plan](docs/implementation-plan.md), [task list](docs/task-list.md), [cost estimate](docs/cost-estimate.md).
 
 `packages/contracts` holds the enums, error codes, permission catalogue, feature registry and Zod schemas shared with the web app ([Attendance](https://github.com/mdfakih/Attendance) syncs a copy with `npm run sync:contracts`).
 

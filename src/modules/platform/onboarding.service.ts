@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { AVAILABLE_PAYROLL_TIERS, type CreateTenantInput, type PermissionSet, type PayrollTier } from '@attendance/contracts';
 import { AuditService } from '../../core/audit/audit.service.js';
 import { ENV, type Env } from '../../core/config/env.js';
+import { PRODUCT_NAME } from '../../core/config/product.js';
 import { randomToken, sha256Hex } from '../../core/crypto/crypto.util.js';
 import { DbService, type PlatformTx } from '../../core/database/db.service.js';
 import { AppError } from '../../core/http/app-error.js';
@@ -74,7 +75,7 @@ export class OnboardingService {
     const inviteLink = `${this.env.WEB_APP_URL}/accept-invite?token=${token}`;
     await this.notify.email({
       to: input.admin.email,
-      subject: `You're invited to manage ${input.displayName} attendance`,
+      subject: `You're invited to manage ${input.displayName} on ${PRODUCT_NAME}`,
       text: `Hello ${input.admin.fullName},\n\nSet up your Admin account here (valid for ${INVITE_TTL_DAYS} days):\n${inviteLink}\n`,
     });
     return { tenantId, inviteLink };

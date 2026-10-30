@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { PRODUCT_NAME } from './product.js';
 
 const secret = (name: string) => z.string().min(32, `${name} must be at least 32 characters`);
 
@@ -31,7 +32,7 @@ export const envSchema = z.object({
   SMTP_PORT: z.coerce.number().int().default(1025),
   SMTP_USER: z.string().optional(),
   SMTP_PASSWORD: z.string().optional(),
-  SMTP_FROM: z.string().default('Attendance <no-reply@attendance.local>'),
+  SMTP_FROM: z.string().default(`${PRODUCT_NAME} <no-reply@kamaigo.local>`),
 
   JWT_SECRET_EMPLOYEE: secret('JWT_SECRET_EMPLOYEE'),
   JWT_SECRET_TENANT: secret('JWT_SECRET_TENANT'),

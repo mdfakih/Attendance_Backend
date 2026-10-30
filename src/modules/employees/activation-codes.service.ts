@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import type { CodePurpose } from '@attendance/contracts';
 import { AuditService } from '../../core/audit/audit.service.js';
 import { ENV, type Env } from '../../core/config/env.js';
+import { PRODUCT_NAME } from '../../core/config/product.js';
 import { currentContext, SYSTEM_ACTOR } from '../../core/context/request-context.js';
 import {
   decryptString,
@@ -142,11 +143,11 @@ export class ActivationCodesService {
     const tenant = await this.db.platform.tenant.findUniqueOrThrow({ where: { id: employee.tenantId }, select: { displayName: true } });
     const sent = await this.notify.email({
       to: employee.email,
-      subject: `Your ${tenant.displayName} attendance app code`,
+      subject: `Your ${tenant.displayName} ${PRODUCT_NAME} app code`,
       text: [
         `Hello ${employee.fullName},`,
         '',
-        `Install the attendance app and sign in with your mobile number ${employee.phoneE164} and this one-time code:`,
+        `Install the ${PRODUCT_NAME} app and sign in with your mobile number ${employee.phoneE164} and this one-time code:`,
         '',
         `    ${code.formatted}`,
         '',

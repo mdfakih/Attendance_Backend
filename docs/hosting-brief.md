@@ -1,4 +1,4 @@
-# Hosting brief — Attendance apps
+# Hosting brief — KamaiGo apps
 
 For: DevOps engineer quoting hosting · 2026-10-29
 

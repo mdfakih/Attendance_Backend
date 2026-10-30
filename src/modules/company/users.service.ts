@@ -4,6 +4,7 @@ import { AuditService } from '../../core/audit/audit.service.js';
 import { PrincipalService } from '../../core/auth/principal.service.js';
 import { RefreshTokenService } from '../../core/auth/refresh-token.service.js';
 import { ENV, type Env } from '../../core/config/env.js';
+import { PRODUCT_NAME } from '../../core/config/product.js';
 import { requireTenantId, requireTenantUser } from '../../core/context/request-context.js';
 import { randomToken, sha256Hex } from '../../core/crypto/crypto.util.js';
 import { DbService } from '../../core/database/db.service.js';
@@ -203,7 +204,7 @@ export class UsersService {
     await this.notify.email({
       to: email,
       subject: `You're invited to ${tenant.displayName}`,
-      text: `Hello ${fullName},\n\nYou have been invited to ${tenant.displayName}'s attendance dashboard.\nAccept within ${INVITE_DAYS} days:\n${this.env.WEB_APP_URL}/accept-invite?token=${token}\n`,
+      text: `Hello ${fullName},\n\nYou have been invited to ${tenant.displayName}'s ${PRODUCT_NAME} dashboard.\nAccept within ${INVITE_DAYS} days:\n${this.env.WEB_APP_URL}/accept-invite?token=${token}\n`,
     });
   }
 }

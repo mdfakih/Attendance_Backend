@@ -12,6 +12,7 @@ import {
 import { AuditService } from '../../core/audit/audit.service.js';
 import { PrincipalService } from '../../core/auth/principal.service.js';
 import { ENV, type Env } from '../../core/config/env.js';
+import { PRODUCT_NAME } from '../../core/config/product.js';
 import { randomToken, sha256Hex } from '../../core/crypto/crypto.util.js';
 import { DbService } from '../../core/database/db.service.js';
 import { AppError, notFound } from '../../core/http/app-error.js';
@@ -235,7 +236,7 @@ export class TenantsService {
     const inviteLink = `${this.env.WEB_APP_URL}/accept-invite?token=${token}`;
     await this.notify.email({
       to: email,
-      subject: 'Your Admin invitation',
+      subject: `Your ${PRODUCT_NAME} Admin invitation`,
       text: `Set up your account here (valid for 7 days):\n${inviteLink}\n`,
     });
     return { inviteLink };
