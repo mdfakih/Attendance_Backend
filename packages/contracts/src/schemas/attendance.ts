@@ -2,18 +2,14 @@ import { z } from 'zod';
 import { ATTENDANCE_STATUSES, LIVENESS_STEPS, MANUAL_MARK_STATUSES, REG_REQUEST_STATUSES } from '../enums.js';
 import { isoDateSchema, monthSchema, paginationQuerySchema, reasonSchema } from './common.js';
 
-export const manualMarkSchema = z
-  .object({
-    employeeId: z.uuid(),
-    date: isoDateSchema,
-    status: z.enum(MANUAL_MARK_STATUSES),
-    leaveTypeId: z.uuid().optional(),
-    reason: reasonSchema,
-  })
-  .refine((v) => v.status !== 'LEAVE' || v.leaveTypeId, {
-    message: 'Choose a leave type',
-    path: ['leaveTypeId'],
-  });
+export const manualMarkSchema = z.object({
+  employeeId: z.uuid(),
+  date: isoDateSchema,
+  status: z.enum(MANUAL_MARK_STATUSES),
+  /** Optional: a manual Leave mark is only allowed while the Leave module is off, when there are no leave types to pick; it counts as paid. */
+  leaveTypeId: z.uuid().optional(),
+  reason: reasonSchema,
+});
 export type ManualMarkInput = z.infer<typeof manualMarkSchema>;
 
 export const revokeMarkSchema = z.object({
