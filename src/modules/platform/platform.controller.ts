@@ -1,6 +1,7 @@
-import { Controller, Get, Param, ParseUUIDPipe, Patch, Post, Put } from '@nestjs/common';
+import { Controller, Delete, Get, Param, ParseUUIDPipe, Patch, Post, Put } from '@nestjs/common';
 import {
   brandingSchema,
+  roleSchema,
   createTenantSchema,
   isoDateSchema,
   loginSchema,
@@ -21,6 +22,7 @@ import { PlatformApi, PlatformRoles, Public } from '../../core/auth/decorators.j
 import { requirePlatform } from '../../core/context/request-context.js';
 import { paged } from '../../core/http/envelope.js';
 import { ZBody, ZQuery } from '../../core/http/zod.js';
+import { RolesService } from '../roles/roles.service.js';
 import { BillingService } from './billing.service.js';
 import { OnboardingService } from './onboarding.service.js';
 import { PlatformAuthService } from './platform-auth.service.js';
@@ -75,6 +77,7 @@ export class PlatformController {
     private readonly tenants: TenantsService,
     private readonly onboarding: OnboardingService,
     private readonly billing: BillingService,
+    private readonly roles: RolesService,
   ) {}
 
   @Get('overview')
@@ -138,6 +141,35 @@ export class PlatformController {
   @Put('tenants/:id/branding')
   setBranding(@Param('id', ParseUUIDPipe) id: string, @ZBody(brandingSchema) body: z.infer<typeof brandingSchema>) {
     return this.tenants.setBranding(id, body);
+  }
+
+  @Get('tenants/:id/roles')
+  clientRoles(@Param('id', ParseUUIDPipe) id: string) {
+    return this.roles.list(id);
+  }
+
+  /** Roles and their permissions belong to the platform team; client Admins only assign them. */
+  @PlatformRoles('SUPERADMIN')
+  @Post('tenants/:id/roles')
+  createClientRole(@Param('id', ParseUUIDPipe) id: string, @ZBody(roleSchema) body: z.infer<typeof roleSchema>) {
+    return this.roles.create(id, body);
+  }
+
+  @PlatformRoles('SUPERADMIN')
+  @Put('tenants/:id/roles/:roleId')
+  updateClientRole(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('roleId', ParseUUIDPipe) roleId: string,
+    @ZBody(roleSchema) body: z.infer<typeof roleSchema>,
+  ) {
+    return this.roles.update(id, roleId, body);
+  }
+
+  @PlatformRoles('SUPERADMIN')
+  @Delete('tenants/:id/roles/:roleId')
+  async deleteClientRole(@Param('id', ParseUUIDPipe) id: string, @Param('roleId', ParseUUIDPipe) roleId: string) {
+    await this.roles.remove(id, roleId);
+    return { ok: true };
   }
 
   @Get('tenants/:id/usage')

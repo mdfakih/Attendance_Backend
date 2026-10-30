@@ -1,6 +1,6 @@
 /**
  * Employer-side permission catalogue. Admin has everything; a Manager has only
- * the module × action cells an Admin ticks for their role.
+ * the module × action cells the platform team ticks for their role in the console.
  */
 export const PERMISSION_MODULES = [
   'DASHBOARD',

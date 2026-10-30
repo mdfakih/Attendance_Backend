@@ -50,7 +50,7 @@ Permission grid for Managers: module (Employees, Attendance, Holidays, Leave, Pa
 | D4 | Offline punch | Not allowed. Network required; server time is authoritative |
 | D5 | Hours | Multiple punches per day. Default policy "First-In-Last-Out": hours = last punch − first punch of the day. Tenant can switch to "sum of in/out pairs" |
 | D6 | Pay tiers | Superadmin selects **Basic** or **Full** per tenant. Only Basic is built now. Full is deferred and may be an integration rather than an in-house build. Basic's data model is the input to Full |
-| D7 | Roles | Admin above Manager; Admin ticks Manager module permissions |
+| D7 | Roles | Admin above Manager; the platform Superadmin defines roles and ticks Manager module permissions, the client Admin assigns them |
 | D8 | First login | **No OTP / no SMS.** The employer issues a one-time activation code; our API verifies it and binds the device. Firebase is used only for push notifications (free) |
 | D9 | Platforms | Android first |
 | D10 | Hosting | India region, provider TBD; see [cost-estimate.md](cost-estimate.md) |
@@ -132,7 +132,7 @@ Permission grid for Managers: module (Employees, Attendance, Holidays, Leave, Pa
   - **Salary register:** a monthly register for all employees, with filters.
   - **Finalise:** locking a month freezes its figures; changes after that need an Admin to unlock, with an audit entry.
 - **FR-W10 Exports:** Excel and PDF for attendance, hours, leave and the salary register. Large exports run in the background and give a download link.
-- **FR-W11 Roles:** Admins invite users and set the Manager permission grid (section 3).
+- **FR-W11 Roles:** Admins invite users and assign them a role; roles and the Manager permission grid (section 3) are set by the platform Superadmin in the console.
 - **FR-W12 Leave (optional module):**
   - leave types: paid or unpaid, half-day allowed or not
   - quotas: yearly or monthly accrual, or a fixed amount

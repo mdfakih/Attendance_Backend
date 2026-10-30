@@ -520,7 +520,7 @@ Other rules:
 - **Platform:** `platform_users.role` is SUPERADMIN, SUPPORT, FINANCE or READONLY. The matrix is static, in code.
 - **Tenant:**
   - System role `ADMIN`: all permissions, undeletable; at least one active Admin is enforced.
-  - Custom roles are rows of module × {view, create, edit, delete, export}.
+  - Custom roles are rows of module × {view, create, edit, delete, export}. The platform Superadmin creates, edits and deletes them in the console (`/v1/platform/tenants/:id/roles`); the tenant Admin can only list them (`GET /v1/tenant/roles`) and assign them to users.
   - A **Manager** is a membership with a custom role, plus optional scopes: branches and/or departments (OR within a type, AND across types).
 - **Modules:**
   - DASHBOARD, EMPLOYEES, EMPLOYEE_SALARY

@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { PERMISSION_MODULES, type InviteUserInput, type RoleInput, type UpdateMembershipInput } from '@attendance/contracts';
+import type { InviteUserInput, UpdateMembershipInput } from '@attendance/contracts';
 import { AuditService } from '../../core/audit/audit.service.js';
 import { PrincipalService } from '../../core/auth/principal.service.js';
 import { RefreshTokenService } from '../../core/auth/refresh-token.service.js';
@@ -11,17 +11,9 @@ import { DbService } from '../../core/database/db.service.js';
 import { AppError, notFound } from '../../core/http/app-error.js';
 import { NotifyService } from '../../core/notify/notify.service.js';
 import { iso } from '../../common/serialize.js';
+import { RolesService } from '../roles/roles.service.js';
 
 const INVITE_DAYS = 7;
-
-/** Keeps only known modules/actions so stored permissions always match the catalogue. */
-function cleanPermissions(input: RoleInput['permissions']): Record<string, string[]> {
-  return Object.fromEntries(
-    Object.entries(input)
-      .filter(([module, actions]) => (PERMISSION_MODULES as readonly string[]).includes(module) && actions.length > 0)
-      .map(([module, actions]) => [module, [...new Set(actions)]]),
-  );
-}
 
 @Injectable()
 export class UsersService {
@@ -32,61 +24,12 @@ export class UsersService {
     private readonly principals: PrincipalService,
     private readonly refresh: RefreshTokenService,
     private readonly notify: NotifyService,
+    private readonly rolesService: RolesService,
   ) {}
 
-  async roles() {
-    const roles = await this.db.tenant.role.findMany({
-      orderBy: [{ kind: 'asc' }, { name: 'asc' }],
-      include: { _count: { select: { memberships: true } } },
-    });
-    return roles.map((r) => ({
-      id: r.id,
-      name: r.name,
-      kind: r.kind,
-      description: r.description,
-      isSystem: r.isSystem,
-      permissions: r.permissions,
-      members: r._count.memberships,
-    }));
-  }
-
-  async createRole(input: RoleInput) {
-    const role = await this.db.tenant.role.create({
-      data: {
-        tenantId: requireTenantId(),
-        name: input.name,
-        description: input.description,
-        kind: 'MANAGER',
-        permissions: cleanPermissions(input.permissions),
-      },
-    });
-    await this.audit.record({ action: 'role.create', entityType: 'role', entityId: role.id, after: role });
-    return role;
-  }
-
-  async updateRole(roleId: string, input: RoleInput) {
-    const before = await this.db.tenant.role.findUnique({ where: { id: roleId } });
-    if (!before) throw notFound('Role');
-    if (before.kind === 'ADMIN') {
-      throw new AppError('CONFLICT', 'The Admin role always has full access and cannot be edited.');
-    }
-    const after = await this.db.tenant.role.update({
-      where: { id: roleId },
-      data: { name: input.name, description: input.description, permissions: cleanPermissions(input.permissions) },
-    });
-    await this.bumpPermissions({ roleId });
-    await this.audit.record({ action: 'role.update', entityType: 'role', entityId: roleId, before, after });
-    return after;
-  }
-
-  async deleteRole(roleId: string) {
-    const role = await this.db.tenant.role.findUnique({ where: { id: roleId }, include: { _count: { select: { memberships: true } } } });
-    if (!role) throw notFound('Role');
-    if (role.kind === 'ADMIN' || role._count.memberships > 0) {
-      throw new AppError('CONFLICT', 'Move its users to another role first.');
-    }
-    await this.db.tenant.role.delete({ where: { id: roleId } });
-    await this.audit.record({ action: 'role.delete', entityType: 'role', entityId: roleId, before: role });
+  /** The company's roles, to assign to users; they are created and edited in the platform console. */
+  roles() {
+    return this.rolesService.list(requireTenantId());
   }
 
   async users() {
@@ -191,12 +134,6 @@ export class UsersService {
     }
     await this.audit.record({ action: 'user.update', entityType: 'membership', entityId: membershipId, before, after });
     return { membershipId, status: after.status };
-  }
-
-  private async bumpPermissions(where: { roleId: string }): Promise<void> {
-    const members = await this.db.tenant.tenantMembership.findMany({ where, select: { id: true } });
-    await this.db.tenant.tenantMembership.updateMany({ where, data: { permVersion: { increment: 1 } } });
-    await Promise.all(members.map((m) => this.principals.invalidateMembership(m.id)));
   }
 
   private async sendInvite(tenantId: string, email: string, fullName: string, token: string): Promise<void> {

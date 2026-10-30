@@ -1,9 +1,8 @@
-import { Controller, Delete, Get, Param, ParseUUIDPipe, Patch, Post, Put } from '@nestjs/common';
+import { Controller, Get, Param, ParseUUIDPipe, Patch, Post, Put } from '@nestjs/common';
 import {
   featureToggleSchema,
   inviteUserSchema,
   paySettingsSchema,
-  roleSchema,
   tenantSettingsSchema,
   updateMembershipSchema,
 } from '@attendance/contracts';
@@ -62,29 +61,11 @@ export class CompanyController {
     return this.company.subscription();
   }
 
+  /** Read-only here: roles and their permissions are created and edited in the platform console. */
   @AdminOnly()
   @Get('roles')
   roles() {
     return this.users.roles();
-  }
-
-  @AdminOnly()
-  @Post('roles')
-  createRole(@ZBody(roleSchema) body: z.infer<typeof roleSchema>) {
-    return this.users.createRole(body);
-  }
-
-  @AdminOnly()
-  @Put('roles/:id')
-  updateRole(@Param('id', ParseUUIDPipe) id: string, @ZBody(roleSchema) body: z.infer<typeof roleSchema>) {
-    return this.users.updateRole(id, body);
-  }
-
-  @AdminOnly()
-  @Delete('roles/:id')
-  async deleteRole(@Param('id', ParseUUIDPipe) id: string) {
-    await this.users.deleteRole(id);
-    return { ok: true };
   }
 
   @AdminOnly()
