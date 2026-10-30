@@ -1,6 +1,7 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import type { ManualMarkStatus } from '@attendance/contracts';
 import { Decimal } from 'decimal.js';
+import { forEachLimit } from '../../common/concurrency.js';
 import { sha256Hex } from '../../core/crypto/crypto.util.js';
 import { DbService, type TenantTx } from '../../core/database/db.service.js';
 import type { AttendanceDay, RegState } from '../../generated/prisma/client.js';
@@ -13,6 +14,7 @@ import { DayInputsLoader, type EmployeeContext } from './day-inputs.loader.js';
 const DEFAULT_DUTY_MINUTES = 480;
 /** Long leave spans recompute many days in one transaction. */
 const RECOMPUTE_TX_TIMEOUT_MS = 30_000;
+const RECOMPUTE_CONCURRENCY = 8;
 
 /** Advisory-lock key serialising everything that writes an employee's punches or days. */
 export function employeeDayLock(employeeId: string): string {
@@ -30,6 +32,8 @@ export interface WrittenDay {
 /** The only writer of attendance_days. Deterministic: same inputs → same row (hash-skipped). */
 @Injectable()
 export class AttendanceDayService {
+  private readonly logger = new Logger(AttendanceDayService.name);
+
   constructor(
     private readonly db: DbService,
     private readonly loader: DayInputsLoader,
@@ -99,6 +103,29 @@ export class AttendanceDayService {
         ...(employeeIds === 'ALL' ? {} : { employeeId: { in: [...employeeIds] } }),
       },
       data: { needsRecompute: true },
+    });
+  }
+
+  /**
+   * Settle never reads past today, so flagged days after it would stay stale until they arrive. The few
+   * that exist (written early by an approved leave) are rewritten now; a failed one keeps its flag.
+   */
+  async recomputeStored(employeeIds: readonly string[] | 'ALL', from: IsoDate, to: IsoDate): Promise<void> {
+    const rows = await this.db.tenant.attendanceDay.findMany({
+      where: {
+        attendanceDate: { gte: toDbDate(from), lte: toDbDate(to) },
+        periodLocked: false,
+        ...(employeeIds === 'ALL' ? {} : { employeeId: { in: [...employeeIds] } }),
+      },
+      select: { employeeId: true, attendanceDate: true },
+    });
+    await forEachLimit(rows, RECOMPUTE_CONCURRENCY, async (row) => {
+      const date = row.attendanceDate.toISOString().slice(0, 10);
+      try {
+        await this.recomputeDay(row.employeeId, date);
+      } catch (error: unknown) {
+        this.logger.error(`Recompute ${row.employeeId} ${date} failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
     });
   }
 

@@ -14,7 +14,7 @@ import { DbService } from '../../core/database/db.service.js';
 import { AppError, notFound } from '../../core/http/app-error.js';
 import { AttendanceDayService } from '../attendance/attendance-day.service.js';
 import { dateOnly } from '../../common/serialize.js';
-import { addDays, localDateOf, minDate, toDbDate } from '../../engines/time/dates.js';
+import { addDays, localDateOf, maxDate, toDbDate } from '../../engines/time/dates.js';
 
 @Injectable()
 export class TimeService {
@@ -232,14 +232,18 @@ export class TimeService {
     await this.recompute([row.employeeId], date, date);
   }
 
-  /** Flags existing attendance days (never beyond today); each is recomputed on its next read. */
+  /**
+   * Flags existing attendance days; up to today each is recomputed on its next read. Stored days after
+   * today (e.g. a future holiday on an approved leave day) are rewritten now, since settle never reaches them.
+   */
   private async recompute(employeeIds: string[] | 'ALL', from?: string, to?: string): Promise<void> {
     const tenantId = requireTenantId();
     const tz = (await this.db.platform.tenant.findUniqueOrThrow({ where: { id: tenantId } })).timezone;
     const today = localDateOf(new Date(), tz);
     const start = from ?? addDays(today, -31);
-    const end = minDate(to ?? today, today);
+    const end = to ?? today;
     if (start > end) return;
     await this.days.markStale(employeeIds, start, end);
+    if (end > today) await this.days.recomputeStored(employeeIds, maxDate(start, addDays(today, 1)), end);
   }
 }

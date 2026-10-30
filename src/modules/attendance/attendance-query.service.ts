@@ -8,7 +8,7 @@ import { notFound } from '../../core/http/app-error.js';
 import { StorageService } from '../../core/storage/storage.service.js';
 import { dateOnly, iso, num } from '../../common/serialize.js';
 import type { Prisma } from '../../generated/prisma/client.js';
-import { eachDate, localDateOf, monthRange, toDbDate } from '../../engines/time/dates.js';
+import { addDays, eachDate, type IsoDate, localDateOf, maxDate, minDate, monthRange, toDbDate } from '../../engines/time/dates.js';
 import { AttendanceSettleService } from './attendance-settle.service.js';
 
 const SHORT: Readonly<Record<string, string>> = {
@@ -23,6 +23,30 @@ const SHORT: Readonly<Record<string, string>> = {
   NOT_STARTED: '',
   MISSING_OUT: 'MO',
 };
+
+/** A future holiday as the engine will compute it once its day is written (holiday wins over weekly off). */
+function upcomingHolidayDay(date: IsoDate, name: string) {
+  return {
+    date,
+    status: 'HOLIDAY',
+    statusSource: 'COMPUTED',
+    dayType: 'HOLIDAY',
+    holidayName: name,
+    punchCount: 0,
+    firstPunchAt: null,
+    lastPunchAt: null,
+    workedMinutes: 0,
+    outsideMinutes: 0,
+    regState: 'NOT_APPLICABLE',
+    isLate: false,
+    lateMinutes: 0,
+    isMissingOut: false,
+    otMinutes: 0,
+    otApprovedMinutes: 0,
+    leaveFraction: 0,
+    flags: [] as string[],
+  };
+}
 
 @Injectable()
 export class AttendanceQueryService {
@@ -161,16 +185,19 @@ export class AttendanceQueryService {
   async monthView(employeeId: string, month: string) {
     const { start, end } = monthRange(month);
     await this.settle.settleEmployee(employeeId, start, end);
-    const days = await this.db.tenant.attendanceDay.findMany({
-      where: { employeeId, attendanceDate: { gte: toDbDate(start), lte: toDbDate(end) } },
-      orderBy: { attendanceDate: 'asc' },
-    });
+    const [days, upcoming] = await Promise.all([
+      this.db.tenant.attendanceDay.findMany({
+        where: { employeeId, attendanceDate: { gte: toDbDate(start), lte: toDbDate(end) } },
+        orderBy: { attendanceDate: 'asc' },
+      }),
+      this.upcomingHolidays(employeeId, start, end),
+    ]);
     const holidays = await this.db.tenant.holiday.findMany({
       where: { id: { in: days.map((d) => d.holidayId).filter((v): v is string => !!v) } },
       select: { id: true, name: true },
     });
     const holidayName = new Map(holidays.map((h) => [h.id, h.name]));
-    const items = days.map((d) => ({
+    const stored = days.map((d) => ({
       date: dateOnly(d.attendanceDate),
       status: d.finalStatus,
       statusSource: d.statusSource,
@@ -190,6 +217,11 @@ export class AttendanceQueryService {
       leaveFraction: num(d.leaveFraction),
       flags: d.flags,
     }));
+    const storedDates = new Set(stored.map((d) => d.date));
+    const items = [
+      ...stored,
+      ...upcoming.filter((h) => !storedDates.has(dateOnly(h.holidayDate))).map((h) => upcomingHolidayDay(dateOnly(h.holidayDate) as string, h.name)),
+    ].sort((a, b) => (a.date ?? '').localeCompare(b.date ?? ''));
     const totals = {
       workedMinutes: days.reduce((acc, d) => acc + d.workedMinutes, 0),
       present: days.filter((d) => d.finalStatus === 'PRESENT').length,
@@ -199,6 +231,27 @@ export class AttendanceQueryService {
       late: days.filter((d) => d.isLate).length,
     };
     return { month, days: items, totals };
+  }
+
+  /** Days after today have no rows yet (settle stops at today), so their holidays come straight from the employee's calendar. */
+  private async upcomingHolidays(employeeId: string, start: IsoDate, end: IsoDate) {
+    const tomorrow = addDays(await this.settle.today(), 1);
+    if (tomorrow > end) return [];
+    const [employee, settings] = await Promise.all([
+      this.db.tenant.employee.findUniqueOrThrow({
+        where: { id: employeeId },
+        select: { dateOfJoining: true, exitDate: true, branch: { select: { holidayCalendarId: true } } },
+      }),
+      this.db.tenant.tenantSettings.findUnique({ where: { tenantId: requireTenantId() }, select: { defaultCalendarId: true } }),
+    ]);
+    const calendarId = employee.branch.holidayCalendarId ?? settings?.defaultCalendarId;
+    const from = maxDate(maxDate(start, tomorrow), dateOnly(employee.dateOfJoining) as string);
+    const to = employee.exitDate ? minDate(end, dateOnly(employee.exitDate) as string) : end;
+    if (!calendarId || from > to) return [];
+    return this.db.tenant.holiday.findMany({
+      where: { calendarId, holidayDate: { gte: toDbDate(from), lte: toDbDate(to) } },
+      select: { holidayDate: true, name: true },
+    });
   }
 
   async dayDetail(employeeId: string, date: string, withSelfies = true) {
