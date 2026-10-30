@@ -23,7 +23,8 @@ export const featureToggleSchema = z.object({
 });
 export type FeatureToggleInput = z.infer<typeof featureToggleSchema>;
 
-const permissionMatrixSchema = z.record(z.enum(PERMISSION_MODULES), z.array(z.enum(PERMISSION_ACTIONS)));
+// Partial: a role lists only the modules it can use (z.record with enum keys would demand every module).
+const permissionMatrixSchema = z.partialRecord(z.enum(PERMISSION_MODULES), z.array(z.enum(PERMISSION_ACTIONS)));
 
 export const roleSchema = z.object({
   name: z.string().trim().min(2).max(60),
